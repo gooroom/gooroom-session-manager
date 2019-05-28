@@ -1,0 +1,17 @@
+#!/usr/bin/make -f
+
+LDFLAGS += -Wl,-z,defs -Wl,--as-needed
+
+%:
+	dh $@
+
+override_dh_auto_configure:
+	./autogen.sh
+	dh_auto_configure -- \
+		--disable-silent-rules
+
+override_dh_fixperms:
+	dh_fixperms
+
+	find debian -name 'kill-gooroom-splash' -exec chown root {} \;
+	find debian -name 'kill-gooroom-splash' -exec chmod +s {} \;

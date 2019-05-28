@@ -1,0 +1,44 @@
+# Korean translations for gooroom-session-manager package.
+# Copyright (C) 2016 THE gooroom-session-manager'S COPYRIGHT HOLDER
+# This file is distributed under the same license as the gooroom-session-manager package.
+#
+msgid ""
+msgstr ""
+"Project-Id-Version: gooroom-session-manager 0.1.0\n"
+"Report-Msgid-Bugs-To: \n"
+"POT-Creation-Date: 2019-03-11 17:13+0900\n"
+"Language-Team: Korean\n"
+"Language: ko\n"
+"MIME-Version: 1.0\n"
+"Content-Type: text/plain; charset=UTF-8\n"
+"Content-Transfer-Encoding: 8bit\n"
+"Plural-Forms: nplurals=1; plural=0;\n"
+
+msgid "User Configuration Error"
+msgstr "사용자 환경설정 에러"
+
+msgid "Warning"
+msgstr "경고"
+
+msgid "Failed to restart GRAC service.\nPlease login again."
+msgstr "GRAC 서비스를 시작하지 못했습니다.\n다시 로그인하시기 바랍니다."
+
+msgid "GRAC Service Start Failure"
+msgstr "GRAC 서비스 시작 실패"
+
+msgid "Update Blocking Function"
+msgstr "업데이트 차단 기능"
+
+msgid "Update blocking function has been enabled."
+msgstr "업데이트 차단 기능이 활성화 되었습니다."
+
+msgid "Update blocking function has been disabled."
+msgstr "업데이트 차단 기능이 비활성화 되었습니다."
+
+msgid ""
+"Could not found user's settings file.\n"
+"After 10 seconds, the user will be logged out."
+msgstr "사용자 환경설정 파일을 찾을 수 없습니다.\n10초 후 로그아웃 됩니다."
+
+msgid "Terminating Session"
+msgstr "세션 종료"

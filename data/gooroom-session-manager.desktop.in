@@ -1,0 +1,7 @@
+[Desktop Entry]
+Type=Application
+Name=Gooroom Session Manager
+Exec=@pkglibexecdir@/gooroom-session-manager
+StartupNotify=false
+Terminal=false
+NoDisplay=true

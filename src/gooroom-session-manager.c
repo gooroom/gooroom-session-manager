@@ -1,0 +1,687 @@
+/*
+ * Copyright (c) 2015 - 2017 gooroom <gooroom@gooroom.kr>
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation; either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program; if not, write to the Free Software
+ * Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
+ */
+
+#ifdef HAVE_CONFIG_H
+#include <config.h>
+#endif
+
+#include <stdio.h>
+#include <string.h>
+#include <locale.h>
+#include <libintl.h>
+#include <pwd.h>
+#include <sys/stat.h>
+
+#include <dbus/dbus.h>
+//#include <curl/curl.h>
+#include <json-c/json.h>
+#include <polkit/polkit.h>
+
+#include <glib.h>
+#include <gtk/gtk.h>
+#include <glib/gi18n.h>
+#include <glib/gstdio.h>
+//#include <gio/gio.h>
+//#include <gio/gdesktopappinfo.h>
+
+#include <libnotify/notify.h>
+
+#define	GRM_USER		        ".grm-user"
+#define	DEFAULT_BACKGROUND      "/usr/share/images/desktop-base/desktop-background.xml"
+
+
+static guint name_id = 0;
+static GDBusProxy *agent_proxy = NULL;
+
+
+
+static gboolean
+is_online_user (const gchar *username)
+{
+	gboolean ret = FALSE;
+
+	struct passwd *entry = getpwnam (username);
+	if (entry) {
+		gchar **tokens = g_strsplit (entry->pw_gecos, ",", -1);
+		if (g_strv_length (tokens) > 4 ) {
+			if (tokens[4] && (g_strcmp0 (tokens[4], "gooroom-online-account") == 0)) {
+				ret = TRUE;
+			}
+		}
+		g_strfreev (tokens);
+	}
+
+	return ret;
+}
+
+static gboolean
+authenticate (const gchar *action_id)
+{
+	GPermission *permission;
+	permission = polkit_permission_new_sync (action_id, NULL, NULL, NULL);
+
+	if (!g_permission_get_allowed (permission)) {
+		if (g_permission_acquire (permission, NULL, NULL)) {
+			return TRUE;
+		}
+		return FALSE;
+	}
+
+	return TRUE;
+}
+
+json_object *
+JSON_OBJECT_GET (json_object *root_obj, const char *key)
+{
+	if (!root_obj) return NULL;
+
+	json_object *ret_obj = NULL;
+
+	json_object_object_get_ex (root_obj, key, &ret_obj);
+
+	return ret_obj;
+}
+
+static gchar *
+get_grm_user_data (void)
+{
+	gchar *data, *file = NULL;
+
+	file = g_strdup_printf ("/var/run/user/%d/gooroom/%s", getuid (), GRM_USER);
+
+	if (!g_file_test (file, G_FILE_TEST_EXISTS))
+		goto error;
+	
+	g_file_get_contents (file, &data, NULL, NULL);
+
+error:
+	g_free (file);
+
+	return data;
+}
+
+static void
+dpms_off_time_update (gint32 value)
+{
+	gint32 val;
+
+	val = value < 0 ? 0 : value;
+	val = value > 3600 ? 3600 : value;
+
+	GSettings *settings;
+
+	settings = g_settings_new ("org.gnome.desktop.session");
+	g_settings_set_int (settings, "idle-delay", val);
+	g_object_unref (settings);
+}
+
+static GDBusProxy *
+agent_proxy_get (void)
+{
+	if (agent_proxy == NULL) {
+		agent_proxy = g_dbus_proxy_new_for_bus_sync (G_BUS_TYPE_SYSTEM,
+				G_DBUS_CALL_FLAGS_NONE,
+				NULL,
+				"kr.gooroom.agent",
+				"/kr/gooroom/agent",
+				"kr.gooroom.agent",
+				NULL,
+				NULL);
+	}
+
+	return agent_proxy;
+}
+
+static gchar *
+get_dpms_off_time_from_json (const gchar *data)
+{
+	g_return_val_if_fail (data != NULL, NULL);
+
+	gchar *ret = NULL;
+
+	enum json_tokener_error jerr = json_tokener_success;
+	json_object *root_obj = json_tokener_parse_verbose (data, &jerr);
+
+	if (jerr == json_tokener_success) {
+		json_object *obj1 = NULL, *obj2 = NULL, *obj3 = NULL, *obj4 = NULL;
+		obj1 = JSON_OBJECT_GET (root_obj, "module");
+		obj2 = JSON_OBJECT_GET (obj1, "task");
+		obj3 = JSON_OBJECT_GET (obj2, "out");
+		obj4 = JSON_OBJECT_GET (obj3, "status");
+		if (obj4) {
+			const char *val = json_object_get_string (obj4);
+			if (val && g_strcmp0 (val, "200") == 0) {
+				json_object *obj = JSON_OBJECT_GET (obj3, "screen_time");
+				ret = g_strdup (json_object_get_string (obj));
+			}
+		}
+		json_object_put (root_obj);
+	}
+
+	return ret;
+}
+
+static gboolean
+download_with_wget (const gchar *download_url, const gchar *download_path)
+{
+	gboolean ret = FALSE;
+
+	if (!download_url || !download_path)
+		return FALSE;
+
+	gchar *cmd = g_find_program_in_path ("wget");
+	if (cmd) {
+		gchar *cmdline = g_strdup_printf ("%s --no-check-certificate %s -q -O %s", cmd, download_url, download_path);
+		ret = g_spawn_command_line_sync (cmdline, NULL, NULL, NULL, NULL);
+		g_free (cmdline);
+	}
+	g_free (cmd);
+
+	return ret;
+}
+
+static gchar *
+download_background (const gchar *download_url)
+{
+	g_return_val_if_fail (download_url != NULL, NULL);
+
+	gchar *name, *download_path = NULL;
+
+	name = g_uuid_string_random ();
+
+	download_path = g_build_filename (g_get_user_cache_dir (),
+                                      "gnome-control-center",
+                                      "backgrounds", name, NULL);
+
+	if (!download_with_wget (download_url, download_path))
+		goto error;
+
+	// check file size
+	struct stat st;
+	if (lstat (download_path, &st) == -1)
+		goto error;
+
+	if (st.st_size == 0)
+		goto error;
+
+	return download_path;
+
+error:
+	g_free (download_path);
+
+	return g_strdup (DEFAULT_BACKGROUND);
+}
+
+static void
+set_icon_theme (const gchar *icon_theme)
+{
+	g_return_if_fail (icon_theme != NULL);
+
+	GSettings *settings;
+
+	settings = g_settings_new ("org.gnome.desktop.interface");
+	g_settings_set_string (settings, "icon-theme", icon_theme);
+	g_object_unref (settings);
+}
+
+static void
+set_desktop_screensaver_background (const char *wallpaper_name, const gchar *wallpaper_uri)
+{
+	GSettings *settings;
+	GFile *dest = NULL;
+	gchar *path, *background = NULL;
+
+	if (!wallpaper_uri) {
+		path = g_strdup (DEFAULT_BACKGROUND);
+		goto done;
+	}
+
+	if (g_str_has_prefix (wallpaper_uri, "http://") ||
+        g_str_has_prefix (wallpaper_uri, "https://")) {
+		path = download_background (wallpaper_uri);
+	} else {
+		path = g_strdup (wallpaper_uri);
+	}
+
+	if (!g_file_test (path, G_FILE_TEST_EXISTS))
+		path = g_strdup (DEFAULT_BACKGROUND);
+
+done:
+	dest = g_file_new_for_path (path);
+	background = g_file_get_uri (dest);
+	g_free (path);
+	g_object_unref (dest);
+
+	settings = g_settings_new ("org.gnome.desktop.background");
+	g_settings_set_string (settings, "picture-uri", background);
+	g_object_unref (settings);
+
+	settings = g_settings_new ("org.gnome.desktop.screensaver");
+	g_settings_set_string (settings, "picture-uri", background);
+	g_object_unref (settings);
+
+	g_free (background);
+}
+
+static void
+handle_desktop_configuration (void)
+{
+	gchar *data = get_grm_user_data ();
+
+	if (data) {
+		enum json_tokener_error jerr = json_tokener_success;
+		json_object *root_obj = json_tokener_parse_verbose (data, &jerr);
+		if (jerr == json_tokener_success) {
+			json_object *obj1 = NULL, *obj2 = NULL, *obj3_1 = NULL, *obj3_2 = NULL, *obj3_3 = NULL;
+			obj1 = JSON_OBJECT_GET (root_obj, "data");
+			obj2 = JSON_OBJECT_GET (obj1, "desktopInfo");
+			obj3_1 = JSON_OBJECT_GET (obj2, "themeNm");
+			obj3_2 = JSON_OBJECT_GET (obj2, "wallpaperNm");
+			obj3_3 = JSON_OBJECT_GET (obj2, "wallpaperFile");
+
+			if (obj3_1) {
+				const char *icon_theme = json_object_get_string (obj3_1);
+
+				/* set icon theme */
+				set_icon_theme (icon_theme);
+			}
+
+			if (obj3_2 && obj3_3) {
+				const char *wallpaper_name = json_object_get_string (obj3_2);
+				const char *wallpaper_uri = json_object_get_string (obj3_3);
+
+				/* set wallpaper */
+				set_desktop_screensaver_background (wallpaper_name, wallpaper_uri);
+			}
+
+			json_object_put (root_obj);
+		}
+	}
+
+	g_free (data);
+}
+
+static void
+reload_grac_service (void)
+{
+	if (!authenticate ("kr.gooroom.SessionManager.systemctl"))
+		return;
+
+	GDBusProxy  *proxy = NULL;
+//	gboolean     success = FALSE;
+	const gchar *service_name = "grac-device-daemon.service";
+
+	proxy = g_dbus_proxy_new_for_bus_sync (G_BUS_TYPE_SYSTEM,
+			G_DBUS_CALL_FLAGS_NONE,
+			NULL,
+			"org.freedesktop.systemd1",
+			"/org/freedesktop/systemd1",
+			"org.freedesktop.systemd1.Manager",
+			NULL, NULL);
+
+	if (proxy) {
+		GVariant *variant = NULL;
+		variant = g_dbus_proxy_call_sync (proxy, "ReloadUnit",
+				g_variant_new ("(ss)", service_name, "replace"),
+				G_DBUS_CALL_FLAGS_NONE, -1, NULL, NULL);
+
+		if (variant) {
+			g_variant_unref (variant);
+//			success = TRUE;
+		}
+
+		g_object_unref (proxy);
+	}
+
+//	if (!success) {
+//		GtkWidget *dlg = gtk_message_dialog_new (NULL,
+//				GTK_DIALOG_MODAL,
+//				GTK_MESSAGE_INFO,
+//				GTK_BUTTONS_CLOSE,
+//				NULL);
+//
+//		const gchar *secondary_text = _("Failed to restart GRAC service.\nPlease login again.");
+//		gtk_window_set_title (GTK_WINDOW (dlg), _("GRAC Service Start Failure"));
+//		gtk_message_dialog_format_secondary_text (GTK_MESSAGE_DIALOG (dlg), "%s", secondary_text);
+//		g_signal_connect (dlg, "response", G_CALLBACK (gtk_widget_destroy), NULL);
+//
+//		gtk_widget_show (dlg);
+//	}
+}
+
+static void
+request_dpms_off_time_done_cb (GObject      *source_object,
+                               GAsyncResult *res,
+                               gpointer      user_data)
+{
+	GVariant *variant;
+	gchar *data = NULL;
+
+	variant = g_dbus_proxy_call_finish (G_DBUS_PROXY (source_object), res, NULL);
+	if (variant) {
+		GVariant *v;
+		g_variant_get (variant, "(v)", &v);
+		if (v) {
+			data = g_variant_dup_string (v, NULL);
+			g_variant_unref (v);
+		}
+		g_variant_unref (variant);
+	}
+
+	if (data) {
+		gchar *value = get_dpms_off_time_from_json (data);
+		dpms_off_time_update (atoi (value));
+		g_free (value);
+		g_free (data);
+	}
+}
+
+static void
+dpms_off_time_set (void)
+{
+	agent_proxy = agent_proxy_get ();
+	if (agent_proxy) {
+		const gchar *json = "{\"module\":{\"module_name\":\"config\",\"task\":{\"task_name\":\"dpms_off_time\",\"in\":{\"login_id\":\"%s\"}}}}";
+
+		gchar *arg = g_strdup_printf (json, g_get_user_name ());
+
+		g_dbus_proxy_call (agent_proxy,
+                           "do_task",
+                           g_variant_new ("(s)", arg),
+                           G_DBUS_CALL_FLAGS_NONE,
+                           -1,
+                           NULL,
+                           request_dpms_off_time_done_cb,
+                           NULL);
+		g_free (arg);
+	}
+}
+
+static void
+save_app_blacklist (gchar *blacklist)
+{
+	g_return_if_fail (blacklist != NULL);
+
+	GSettings *settings = NULL;
+	GSettingsSchema *schema = NULL;
+
+	schema = g_settings_schema_source_lookup (g_settings_schema_source_get_default (), "org.dockbarx", TRUE);
+	if (schema)
+		settings = g_settings_new_full (schema, NULL, NULL);
+
+	if (settings) {
+		gchar **filters = g_strsplit (blacklist, ",", -1);
+		g_settings_set_strv (settings, "blacklist", (const char * const *) filters);
+		g_strfreev (filters);
+		g_object_unref (settings);
+	}
+}
+
+static void
+agent_signal_cb (GDBusProxy *proxy,
+                 gchar *sender_name,
+                 gchar *signal_name,
+                 GVariant *parameters,
+                 gpointer user_data)
+{
+	if (g_str_equal (signal_name, "dpms_on_x_off")) {
+		gint32 value = 0;
+		g_variant_get (parameters, "(i)", &value);
+		dpms_off_time_update (value);
+	} else if (g_str_equal (signal_name, "update_operation")) {
+		gint32 value = -1;
+		g_variant_get (parameters, "(i)", &value);
+
+		NotifyNotification *notification;
+		gchar *cmdline = NULL;
+		const gchar *message;
+		const gchar *icon = "software-update-available-symbolic";
+		const gchar *summary = _("Update Blocking Function");
+		if (value == 0) {
+			message = _("Update blocking function has been disabled.");
+			cmdline = g_find_program_in_path ("gooroom-update-launcher");
+		} else if (value == 1) {
+			message = _("Update blocking function has been enabled.");
+			gchar *cmd = g_find_program_in_path ("pkill");
+			if (cmd) cmdline = g_strdup_printf ("%s -f '/usr/lib/gooroom/gooroomUpdate/gooroomUpdate.py'", cmd);
+			g_free (cmd);
+		}
+
+		g_spawn_command_line_async (cmdline, NULL);
+		g_free (cmdline);
+
+		notify_init (PACKAGE_NAME);
+		notification = notify_notification_new (summary, message, icon);
+
+		notify_notification_set_urgency (notification, NOTIFY_URGENCY_NORMAL);
+		notify_notification_set_timeout (notification, NOTIFY_EXPIRES_DEFAULT);
+		notify_notification_show (notification, NULL);
+		g_object_unref (notification);
+	} else if (g_str_equal (signal_name, "app_black_list")) {
+		GVariant *v = NULL;
+		gchar *blacklist = NULL;
+		g_variant_get (parameters, "(v)", &v);
+		if (v) {
+			blacklist = g_variant_dup_string (v, NULL);
+			g_variant_unref (v);
+		}
+
+		if (blacklist) {
+			save_app_blacklist (blacklist);
+			g_free (blacklist);
+		}
+	}
+}
+
+static void
+gooroom_agent_bind_signal (void)
+{
+	agent_proxy = agent_proxy_get ();
+	if (agent_proxy) {
+		g_signal_connect (agent_proxy, "g-signal", G_CALLBACK (agent_signal_cb), NULL);
+	}
+}
+
+static gchar *
+get_blacklist_from_json (const gchar *data)
+{
+	g_return_val_if_fail (data != NULL, NULL);
+
+	gchar *ret = NULL;
+
+	enum json_tokener_error jerr = json_tokener_success;
+	json_object *root_obj = json_tokener_parse_verbose (data, &jerr);
+
+	if (jerr == json_tokener_success) {
+		json_object *obj1 = NULL, *obj2 = NULL, *obj3 = NULL, *obj4 = NULL;
+		obj1 = JSON_OBJECT_GET (root_obj, "module");
+		obj2 = JSON_OBJECT_GET (obj1, "task");
+		obj3 = JSON_OBJECT_GET (obj2, "out");
+		obj4 = JSON_OBJECT_GET (obj3, "status");
+		if (obj4) {
+			const char *val = json_object_get_string (obj4);
+			if (val && g_strcmp0 (val, "200") == 0) {
+				json_object *obj = JSON_OBJECT_GET (obj3, "black_list");
+				ret = g_strdup (json_object_get_string (obj));
+			}
+		}
+		json_object_put (root_obj);
+	}
+
+	return ret;
+}
+
+static void
+request_app_blacklist_done_cb (GObject      *source_object,
+                               GAsyncResult *res,
+                               gpointer      user_data)
+{
+	GVariant *variant;
+	gchar *data = NULL;
+
+	variant = g_dbus_proxy_call_finish (G_DBUS_PROXY (source_object), res, NULL);
+	if (variant) {
+		GVariant *v;
+		g_variant_get (variant, "(v)", &v);
+		if (v) {
+			data = g_variant_dup_string (v, NULL);
+			g_variant_unref (v);
+		}
+		g_variant_unref (variant);
+	}
+
+	if (data) {
+		gchar *blacklist = get_blacklist_from_json (data);
+		if (blacklist) {
+			save_app_blacklist (blacklist);
+			g_free (blacklist);
+		}
+		g_free (data);
+	}
+}
+
+static void
+app_blacklist_update (void)
+{
+	agent_proxy = agent_proxy_get ();
+	if (agent_proxy) {
+		const gchar *json = "{\"module\":{\"module_name\":\"config\",\"task\":{\"task_name\":\"get_app_list\",\"in\":{\"login_id\":\"%s\"}}}}";
+
+		gchar *arg = g_strdup_printf (json, g_get_user_name ());
+
+		g_dbus_proxy_call (agent_proxy,
+				"do_task",
+				g_variant_new ("(s)", arg),
+				G_DBUS_CALL_FLAGS_NONE,
+				-1,
+				NULL,
+				request_app_blacklist_done_cb,
+				NULL);
+
+		g_free (arg);
+	}
+}
+
+static gboolean
+logout_session_cb (gpointer data)
+{
+	g_spawn_command_line_async ("systemd-run systemctl restart lightdm.service", NULL);
+
+	return FALSE;
+}
+
+static void
+start_job_on_online (void)
+{
+	gchar *file = g_strdup_printf ("/var/run/user/%d/gooroom/%s", getuid (), GRM_USER);
+
+	if (g_file_test (file, G_FILE_TEST_EXISTS)) {
+		/* configure desktop */
+		handle_desktop_configuration ();
+		app_blacklist_update ();
+	} else {
+		GtkWidget *message = gtk_message_dialog_new (NULL,
+				GTK_DIALOG_MODAL,
+				GTK_MESSAGE_ERROR,
+				GTK_BUTTONS_OK,
+				NULL);
+
+		gtk_message_dialog_format_secondary_text (GTK_MESSAGE_DIALOG (message),
+				_("Could not found user's settings file.\nAfter 10 seconds, the user will be logged out."));
+
+		gtk_window_set_title (GTK_WINDOW (message), _("Terminating Session"));
+
+		g_signal_connect (message, "response", G_CALLBACK (gtk_widget_destroy), NULL);
+
+		g_timeout_add (1000 * 10, (GSourceFunc) logout_session_cb, NULL);
+
+		gtk_widget_show (message);
+	}
+
+	g_free (file);
+}
+
+static gboolean
+kill_splash (gpointer data)
+{
+	g_spawn_command_line_async (KILL_GOOROOM_SPLASH, NULL);
+
+	return FALSE;
+}
+
+static gboolean
+start_job (gpointer data)
+{
+	if (is_online_user (g_get_user_name ()))
+		start_job_on_online ();
+
+	/* reload grac service */
+	reload_grac_service ();
+	dpms_off_time_set ();
+	gooroom_agent_bind_signal ();
+
+	g_timeout_add (1000 * 3, (GSourceFunc)kill_splash, NULL);
+
+	return FALSE;
+}
+
+static void
+name_acquired_handler (GDBusConnection *connection,
+                       const gchar     *name,
+                       gpointer         user_data)
+{
+	g_idle_add ((GSourceFunc) start_job, NULL);
+
+}
+
+static void
+name_lost_handler (GDBusConnection *connection,
+                   const gchar *name,
+                   gpointer user_data)
+{
+	/* Name was already taken, or the bus went away */
+	g_warning ("Name taken or bus went away - shutting down");
+
+	gtk_main_quit ();
+}
+
+int
+main (int argc, char **argv)
+{
+	setlocale (LC_ALL, "");
+	bindtextdomain (GETTEXT_PACKAGE, GNOMELOCALEDIR);
+	textdomain (GETTEXT_PACKAGE);
+
+	gtk_init (&argc, &argv);
+
+	name_id = g_bus_own_name (G_BUS_TYPE_SESSION,
+                              "kr.gooroom.SessionManager",
+                              G_BUS_NAME_OWNER_FLAGS_NONE,
+                              NULL,
+                              (GBusNameAcquiredCallback) name_acquired_handler,
+                              (GBusNameLostCallback) name_lost_handler,
+                              NULL,
+                              NULL);
+
+	gtk_main ();
+
+	if (agent_proxy)
+		g_object_unref (agent_proxy);
+
+	return 0;
+}
