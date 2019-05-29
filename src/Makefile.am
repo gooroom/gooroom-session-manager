@@ -34,5 +34,5 @@ kill_gooroom_splash_LDADD = \
 	$(GLIB_LIBS)
 
 install-exec-hook:
-	chown root "$(DESTDIR)/$(pkglibexecdir)/kill-gooroom-splash"
-	chmod +s "$(DESTDIR)/$(pkglibexecdir)/kill-gooroom-splash"
+	chown root "$(DESTDIR)$(pkglibexecdir)/kill-gooroom-splash"
+	chmod +s "$(DESTDIR)$(pkglibexecdir)/kill-gooroom-splash"
