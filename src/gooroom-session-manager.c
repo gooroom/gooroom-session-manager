@@ -46,7 +46,8 @@
 
 
 static guint name_id = 0;
-static GDBusProxy *agent_proxy = NULL;
+static GDBusProxy *g_grac_proxy = NULL;
+static GDBusProxy *g_agent_proxy = NULL;
 
 
 
@@ -131,10 +132,12 @@ dpms_off_time_update (gint32 value)
 }
 
 static GDBusProxy *
-agent_proxy_get (void)
+proxy_get (const char *id)
 {
-	if (agent_proxy == NULL) {
-		agent_proxy = g_dbus_proxy_new_for_bus_sync (G_BUS_TYPE_SYSTEM,
+	GDBusProxy *proxy = NULL;
+
+	if (g_str_equal (id, "agent")) {
+		proxy = g_dbus_proxy_new_for_bus_sync (G_BUS_TYPE_SYSTEM,
 				G_DBUS_CALL_FLAGS_NONE,
 				NULL,
 				"kr.gooroom.agent",
@@ -142,9 +145,18 @@ agent_proxy_get (void)
 				"kr.gooroom.agent",
 				NULL,
 				NULL);
+	} else if (g_str_equal (id, "grac")) {
+		proxy = g_dbus_proxy_new_for_bus_sync (G_BUS_TYPE_SYSTEM,
+				G_DBUS_CALL_FLAGS_NONE,
+				NULL,
+				"kr.gooroom.GRACDEVD",
+				"/kr/gooroom/GRACDEVD",
+				"kr.gooroom.GRACDEVD",
+				NULL,
+				NULL);
 	}
 
-	return agent_proxy;
+	return proxy;
 }
 
 static gchar *
@@ -394,13 +406,15 @@ request_dpms_off_time_done_cb (GObject      *source_object,
 static void
 dpms_off_time_set (void)
 {
-	agent_proxy = agent_proxy_get ();
-	if (agent_proxy) {
+	if (!g_agent_proxy)
+		g_agent_proxy = proxy_get ("agent");
+
+	if (g_agent_proxy) {
 		const gchar *json = "{\"module\":{\"module_name\":\"config\",\"task\":{\"task_name\":\"dpms_off_time\",\"in\":{\"login_id\":\"%s\"}}}}";
 
 		gchar *arg = g_strdup_printf (json, g_get_user_name ());
 
-		g_dbus_proxy_call (agent_proxy,
+		g_dbus_proxy_call (g_agent_proxy,
                            "do_task",
                            g_variant_new ("(s)", arg),
                            G_DBUS_CALL_FLAGS_NONE,
@@ -410,6 +424,40 @@ dpms_off_time_set (void)
                            NULL);
 		g_free (arg);
 	}
+}
+
+static void
+do_update_operation (gint32 value)
+{
+	gchar *cmdline = NULL;
+	NotifyNotification *notification;
+
+	const gchar *message;
+	const gchar *icon = "software-update-available-symbolic";
+	const gchar *summary = _("Update Blocking Function");
+
+	if (value == 0) {
+		message = _("Update blocking function has been disabled.");
+		cmdline = g_find_program_in_path ("gooroom-update-launcher");
+	} else if (value == 1) {
+		message = _("Update blocking function has been enabled.");
+		gchar *cmd = g_find_program_in_path ("pkill");
+		if (cmd)
+			cmdline = g_strdup_printf ("%s -f '/usr/lib/gooroom/gooroomUpdate/gooroomUpdate.py'", cmd);
+		g_free (cmd);
+	}
+
+	g_spawn_command_line_async (cmdline, NULL);
+	g_free (cmdline);
+
+	notify_init (PACKAGE_NAME);
+	notification = notify_notification_new (summary, message, icon);
+
+	notify_notification_set_urgency (notification, NOTIFY_URGENCY_NORMAL);
+	notify_notification_set_timeout (notification, NOTIFY_EXPIRES_DEFAULT);
+	notify_notification_show (notification, NULL);
+
+	g_object_unref (notification);
 }
 
 static void
@@ -433,6 +481,56 @@ save_app_blacklist (gchar *blacklist)
 }
 
 static void
+show_notification (gchar *data)
+{
+	NotifyNotification *notification;
+
+	const gchar *icon = "dialog-information";
+	const gchar *summary = _("Summary");
+	gchar *message = g_strdup (data);
+
+	notify_init (PACKAGE_NAME);
+	notification = notify_notification_new (summary, message, icon);
+
+	notify_notification_set_urgency (notification, NOTIFY_URGENCY_NORMAL);
+	notify_notification_set_timeout (notification, NOTIFY_EXPIRES_DEFAULT);
+	notify_notification_show (notification, NULL);
+
+	g_free (message);
+
+	g_object_unref (notification);
+}
+
+static void
+do_resource_access_control (gchar *data)
+{
+/* do something with data */
+}
+
+static void
+grac_signal_cb (GDBusProxy *proxy,
+                gchar *sender_name,
+                gchar *signal_name,
+                GVariant *parameters,
+                gpointer user_data)
+{
+	if (g_str_equal (signal_name, "resource_access_control")) {
+		GVariant *v = NULL;
+		gchar *data = NULL;
+		g_variant_get (parameters, "(v)", &v);
+		if (v) {
+			data = g_variant_dup_string (v, NULL);
+			g_variant_unref (v);
+		}
+
+		if (data) {
+			do_resource_access_control (data);
+			g_free (data);
+		}
+	}
+}
+
+static void
 agent_signal_cb (GDBusProxy *proxy,
                  gchar *sender_name,
                  gchar *signal_name,
@@ -443,35 +541,22 @@ agent_signal_cb (GDBusProxy *proxy,
 		gint32 value = 0;
 		g_variant_get (parameters, "(i)", &value);
 		dpms_off_time_update (value);
+	} else if (g_str_equal (signal_name, "show_notification")) {
+		GVariant *v = NULL;
+		gchar *data = NULL;
+		g_variant_get (parameters, "(v)", &v);
+		if (v) {
+			data = g_variant_dup_string (v, NULL);
+			g_variant_unref (v);
+		}
+		if (data) {
+			show_notification (data);
+			g_free (data);
+		}
 	} else if (g_str_equal (signal_name, "update_operation")) {
 		gint32 value = -1;
 		g_variant_get (parameters, "(i)", &value);
-
-		NotifyNotification *notification;
-		gchar *cmdline = NULL;
-		const gchar *message;
-		const gchar *icon = "software-update-available-symbolic";
-		const gchar *summary = _("Update Blocking Function");
-		if (value == 0) {
-			message = _("Update blocking function has been disabled.");
-			cmdline = g_find_program_in_path ("gooroom-update-launcher");
-		} else if (value == 1) {
-			message = _("Update blocking function has been enabled.");
-			gchar *cmd = g_find_program_in_path ("pkill");
-			if (cmd) cmdline = g_strdup_printf ("%s -f '/usr/lib/gooroom/gooroomUpdate/gooroomUpdate.py'", cmd);
-			g_free (cmd);
-		}
-
-		g_spawn_command_line_async (cmdline, NULL);
-		g_free (cmdline);
-
-		notify_init (PACKAGE_NAME);
-		notification = notify_notification_new (summary, message, icon);
-
-		notify_notification_set_urgency (notification, NOTIFY_URGENCY_NORMAL);
-		notify_notification_set_timeout (notification, NOTIFY_EXPIRES_DEFAULT);
-		notify_notification_show (notification, NULL);
-		g_object_unref (notification);
+		do_update_operation (value);
 	} else if (g_str_equal (signal_name, "app_black_list")) {
 		GVariant *v = NULL;
 		gchar *blacklist = NULL;
@@ -480,7 +565,6 @@ agent_signal_cb (GDBusProxy *proxy,
 			blacklist = g_variant_dup_string (v, NULL);
 			g_variant_unref (v);
 		}
-
 		if (blacklist) {
 			save_app_blacklist (blacklist);
 			g_free (blacklist);
@@ -489,12 +573,23 @@ agent_signal_cb (GDBusProxy *proxy,
 }
 
 static void
+gooroom_grac_bind_signal (void)
+{
+	if (!g_grac_proxy)
+		g_grac_proxy = proxy_get ("grac");
+
+	if (g_grac_proxy)
+		g_signal_connect (g_grac_proxy, "g-signal", G_CALLBACK (grac_signal_cb), NULL);
+}
+
+static void
 gooroom_agent_bind_signal (void)
 {
-	agent_proxy = agent_proxy_get ();
-	if (agent_proxy) {
-		g_signal_connect (agent_proxy, "g-signal", G_CALLBACK (agent_signal_cb), NULL);
-	}
+	if (!g_agent_proxy)
+		g_agent_proxy = proxy_get ("agent");
+
+	if (g_agent_proxy)
+		g_signal_connect (g_agent_proxy, "g-signal", G_CALLBACK (agent_signal_cb), NULL);
 }
 
 static gchar *
@@ -558,13 +653,15 @@ request_app_blacklist_done_cb (GObject      *source_object,
 static void
 app_blacklist_update (void)
 {
-	agent_proxy = agent_proxy_get ();
-	if (agent_proxy) {
+	if (!g_agent_proxy)
+		g_agent_proxy = proxy_get ("agent");
+
+	if (g_agent_proxy) {
 		const gchar *json = "{\"module\":{\"module_name\":\"config\",\"task\":{\"task_name\":\"get_app_list\",\"in\":{\"login_id\":\"%s\"}}}}";
 
 		gchar *arg = g_strdup_printf (json, g_get_user_name ());
 
-		g_dbus_proxy_call (agent_proxy,
+		g_dbus_proxy_call (g_agent_proxy,
 				"do_task",
 				g_variant_new ("(s)", arg),
 				G_DBUS_CALL_FLAGS_NONE,
@@ -619,7 +716,7 @@ start_job_on_online (void)
 static gboolean
 kill_splash (gpointer data)
 {
-	g_spawn_command_line_async (KILL_GOOROOM_SPLASH, NULL);
+//	g_spawn_command_line_async (KILL_GOOROOM_SPLASH, NULL);
 
 	return FALSE;
 }
@@ -634,6 +731,7 @@ start_job (gpointer data)
 	reload_grac_service ();
 	dpms_off_time_set ();
 	gooroom_agent_bind_signal ();
+	gooroom_grac_bind_signal ();
 
 	g_timeout_add (1000 * 3, (GSourceFunc)kill_splash, NULL);
 
@@ -680,8 +778,11 @@ main (int argc, char **argv)
 
 	gtk_main ();
 
-	if (agent_proxy)
-		g_object_unref (agent_proxy);
+	if (g_agent_proxy)
+		g_object_unref (g_agent_proxy);
+
+	if (g_grac_proxy)
+		g_object_unref (g_grac_proxy);
 
 	return 0;
 }
