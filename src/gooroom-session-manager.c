@@ -501,10 +501,66 @@ show_notification (gchar *data)
 	g_object_unref (notification);
 }
 
+#ifdef GRAC_DEBUG
+#define GRAC_LOG(fmt, args...) g_print("[%s] " fmt, __func__, ##args)
+#else
+#define GRAC_LOG(fmt, args...) 
+#endif //GRAC_DEBUG
+
 static void
 do_resource_access_control (gchar *data)
 {
-/* do something with data */
+	if (!data) {
+		GRAC_LOG ("data is null\n");
+		return;
+	}
+
+	enum json_tokener_error jerr = json_tokener_success;
+	json_object *root_obj = json_tokener_parse_verbose (data, &jerr);
+	if (jerr != json_tokener_success) {
+		GRAC_LOG ("json parsing error(%d)\n", jerr);
+		return;
+	}
+
+	json_object *obj_title = JSON_OBJECT_GET (root_obj, "title");
+	if (!obj_title) 
+		goto NO_CARE;
+
+	const char *title = json_object_get_string (obj_title);
+	if (!title) 
+		goto NO_CARE;
+	
+	if (g_strcmp0 (title, "media-control") == 0) {
+		json_object *obj_body = JSON_OBJECT_GET (root_obj, "body");
+		if (!obj_body) 
+			goto NO_CARE;
+
+		json_object *obj_media = JSON_OBJECT_GET (obj_body, "media");
+		json_object *obj_control = JSON_OBJECT_GET (obj_body, "control");
+		if (!obj_media || !obj_control) 
+			goto NO_CARE;
+
+		const char *media = json_object_get_string (obj_media);
+		const char *control = json_object_get_string (obj_control);
+		if (!media || !control) 
+			goto NO_CARE;
+
+		char *cmd = g_strdup_printf ("/usr/bin/grac-pactl.py %s %s", media, control);
+		g_spawn_command_line_async (cmd, NULL);
+		GRAC_LOG("%s => done\n", cmd);
+		g_free(cmd);
+	}
+	else {
+		goto NO_CARE;
+	}
+
+	json_object_put (root_obj);
+	return;
+
+NO_CARE:
+	json_object_put (root_obj);
+	GRAC_LOG ("unknown json-data=%s\n", data);
+	return;
 }
 
 static void
@@ -514,7 +570,7 @@ grac_signal_cb (GDBusProxy *proxy,
                 GVariant *parameters,
                 gpointer user_data)
 {
-	if (g_str_equal (signal_name, "resource_access_control")) {
+	if (g_str_equal (signal_name, "grac_letter")) {
 		GVariant *v = NULL;
 		gchar *data = NULL;
 		g_variant_get (parameters, "(v)", &v);
@@ -541,7 +597,7 @@ agent_signal_cb (GDBusProxy *proxy,
 		gint32 value = 0;
 		g_variant_get (parameters, "(i)", &value);
 		dpms_off_time_update (value);
-	} else if (g_str_equal (signal_name, "show_notification")) {
+	} else if (g_str_equal (signal_name, "agent_msg")) {
 		GVariant *v = NULL;
 		gchar *data = NULL;
 		g_variant_get (parameters, "(v)", &v);
@@ -728,10 +784,10 @@ start_job (gpointer data)
 		start_job_on_online ();
 
 	/* reload grac service */
-	reload_grac_service ();
 	dpms_off_time_set ();
 	gooroom_agent_bind_signal ();
 	gooroom_grac_bind_signal ();
+	reload_grac_service ();
 
 	g_timeout_add (1000 * 3, (GSourceFunc)kill_splash, NULL);
 
