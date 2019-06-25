@@ -36,8 +36,6 @@
 #include <gtk/gtk.h>
 #include <glib/gi18n.h>
 #include <glib/gstdio.h>
-//#include <gio/gio.h>
-//#include <gio/gdesktopappinfo.h>
 
 #include <libnotify/notify.h>
 
@@ -60,7 +58,7 @@ is_online_user (const gchar *username)
 	if (entry) {
 		gchar **tokens = g_strsplit (entry->pw_gecos, ",", -1);
 		if (g_strv_length (tokens) > 4 ) {
-			if (tokens[4] && (g_strcmp0 (tokens[4], "gooroom-online-account") == 0)) {
+			if (tokens[4] && (g_strcmp0 (tokens[4], "gooroom-account") == 0)) {
 				ret = TRUE;
 			}
 		}
