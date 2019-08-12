@@ -28,7 +28,6 @@
 #include <sys/stat.h>
 
 #include <dbus/dbus.h>
-//#include <curl/curl.h>
 #include <json-c/json.h>
 #include <polkit/polkit.h>
 
@@ -46,8 +45,27 @@
 static guint name_id = 0;
 static GDBusProxy *g_grac_proxy = NULL;
 static GDBusProxy *g_agent_proxy = NULL;
+//static GList *grac_notifications = NULL;
 
 
+
+static void
+show_notification (const gchar *summary, const gchar *message, const gchar *icon)
+{
+	NotifyNotification *notification;
+
+	if (!summary)
+		summary = _("Notification");
+
+	notify_init (PACKAGE_NAME);
+	notification = notify_notification_new (summary, message, icon);
+
+	notify_notification_set_urgency (notification, NOTIFY_URGENCY_NORMAL);
+	notify_notification_set_timeout (notification, NOTIFY_EXPIRES_DEFAULT);
+	notify_notification_show (notification, NULL);
+
+	g_object_unref (notification);
+}
 
 static gboolean
 is_online_user (const gchar *username)
@@ -125,7 +143,7 @@ dpms_off_time_update (gint32 value)
 	GSettings *settings;
 
 	settings = g_settings_new ("org.gnome.desktop.session");
-	g_settings_set_int (settings, "idle-delay", val);
+	g_settings_set_uint (settings, "idle-delay", val);
 	g_object_unref (settings);
 }
 
@@ -448,56 +466,76 @@ do_update_operation (gint32 value)
 	g_spawn_command_line_async (cmdline, NULL);
 	g_free (cmdline);
 
-	notify_init (PACKAGE_NAME);
-	notification = notify_notification_new (summary, message, icon);
-
-	notify_notification_set_urgency (notification, NOTIFY_URGENCY_NORMAL);
-	notify_notification_set_timeout (notification, NOTIFY_EXPIRES_DEFAULT);
-	notify_notification_show (notification, NULL);
-
-	g_object_unref (notification);
+	show_notification (summary, message, icon);
 }
 
 static void
-save_app_blacklist (gchar *blacklist)
+save_list (gchar *list, const gchar *id)
 {
-	g_return_if_fail (blacklist != NULL);
+	g_return_if_fail (list != NULL);
 
+	const gchar *schema_name, *key;
 	GSettings *settings = NULL;
 	GSettingsSchema *schema = NULL;
 
-	schema = g_settings_schema_source_lookup (g_settings_schema_source_get_default (), "org.dockbarx", TRUE);
+	if (g_str_equal (id, "black_list")) {
+		schema_name = "apps.gooroom-applauncher-applet";
+		key = "blacklist";
+	} else if (g_str_equal (id, "controlcenter_items")) {
+		schema_name = "org.gnome.ControlCenter";
+		key = "whitelist-panels";
+	}
+
+	schema = g_settings_schema_source_lookup (g_settings_schema_source_get_default (), schema_name, TRUE);
+
 	if (schema)
 		settings = g_settings_new_full (schema, NULL, NULL);
 
 	if (settings) {
-		gchar **filters = g_strsplit (blacklist, ",", -1);
-		g_settings_set_strv (settings, "blacklist", (const char * const *) filters);
+		gchar **filters = g_strsplit (list, ",", -1);
+		g_settings_set_strv (settings, key, (const char * const *) filters);
 		g_strfreev (filters);
 		g_object_unref (settings);
 	}
 }
 
 static void
-show_notification (gchar *data)
+grac_notifications_close (GList *list)
 {
-	NotifyNotification *notification;
-
-	const gchar *icon = "dialog-information";
-	const gchar *summary = _("Summary");
-	gchar *message = g_strdup (data);
-
-	notify_init (PACKAGE_NAME);
-	notification = notify_notification_new (summary, message, icon);
-
-	notify_notification_set_urgency (notification, NOTIFY_URGENCY_NORMAL);
-	notify_notification_set_timeout (notification, NOTIFY_EXPIRES_DEFAULT);
-	notify_notification_show (notification, NULL);
-
-	g_free (message);
-
-	g_object_unref (notification);
+	GList *l = NULL;
+	for (l = list; l; l = l->next) {
+		NotifyNotification *n = (NotifyNotification *)l->data;
+		if (n) notify_notification_close (n, NULL);
+	}
 }
+
+//static gboolean
+//grac_notifications_lookup (GList *list, const gchar *find_str)
+//{
+//	GList *l = NULL;
+//	for (l = list; l; l = l->next) {
+//		NotifyNotification *n = (NotifyNotification *)l->data;
+//		if (n) {
+//			const gchar *name = g_object_get_data (G_OBJECT (n), "grmcode");
+//			if (name) {
+//				if (g_str_equal (name, find_str))
+//					return TRUE;
+//			}
+//		}
+//	}
+//
+//	return FALSE;
+//}
+//
+//static void
+//on_grac_notification_closed_cb (NotifyNotification *n, gpointer data)
+//{
+//	if (grac_notifications) {
+//		grac_notifications = g_list_remove (grac_notifications, n);
+//		g_object_unref (n);
+//		n = NULL;
+//	}
+//}
 
 #ifdef GRAC_DEBUG
 #define GRAC_LOG(fmt, args...) g_print("[%s] " fmt, __func__, ##args)
@@ -568,9 +606,11 @@ grac_signal_cb (GDBusProxy *proxy,
                 GVariant *parameters,
                 gpointer user_data)
 {
+	gchar *msg = NULL;
+
 	if (g_str_equal (signal_name, "grac_letter")) {
-		GVariant *v = NULL;
 		gchar *data = NULL;
+		GVariant *v = NULL;
 		g_variant_get (parameters, "(v)", &v);
 		if (v) {
 			data = g_variant_dup_string (v, NULL);
@@ -579,9 +619,40 @@ grac_signal_cb (GDBusProxy *proxy,
 
 		if (data) {
 			do_resource_access_control (data);
+			msg  = g_strdup (data);
 			g_free (data);
 		}
+	} else if (g_str_equal (signal_name, "grac_noti")) {
+		gchar *data = NULL;
+		if (g_variant_is_of_type (parameters, G_VARIANT_TYPE_STRING)) {
+			const char *s;
+			g_variant_get (parameters, "(&s)", &s);
+			if (s) {
+				data = g_strdup (s);
+			}
+		} else if (g_variant_is_of_type (parameters, G_VARIANT_TYPE_VARIANT)) {
+			GVariant *v = NULL;
+			g_variant_get (parameters, "(v)", &v);
+			if (v) {
+				data = g_variant_dup_string (v, NULL);
+				g_variant_unref (v);
+			}
+		}
+
+		if (data) {
+			gchar **infos = g_strsplit (data, ":", -1);
+			msg = g_strdup (infos[1]);
+			g_free (data);
+
+			g_strfreev (infos);
+		}
+	} else {
+		return;
 	}
+
+	show_notification (_("Gooroom Resource Access Control"), msg, "dialog-information");
+
+	g_free (msg);
 }
 
 static void
@@ -604,7 +675,7 @@ agent_signal_cb (GDBusProxy *proxy,
 			g_variant_unref (v);
 		}
 		if (data) {
-			show_notification (data);
+			show_notification (NULL, data, "dialog-information");
 			g_free (data);
 		}
 	} else if (g_str_equal (signal_name, "update_operation")) {
@@ -620,8 +691,20 @@ agent_signal_cb (GDBusProxy *proxy,
 			g_variant_unref (v);
 		}
 		if (blacklist) {
-			save_app_blacklist (blacklist);
+			save_list (blacklist, "black_list");
 			g_free (blacklist);
+		}
+	} else if (g_str_equal (signal_name, "controlcenter_items")) {
+		GVariant *v = NULL;
+		gchar *items = NULL;
+		g_variant_get (parameters, "(v)", &v);
+		if (v) {
+			items = g_variant_dup_string (v, NULL);
+			g_variant_unref (v);
+		}
+		if (items) {
+			save_list (items, "controlcenter_items");
+			g_free (items);
 		}
 	}
 }
@@ -647,7 +730,7 @@ gooroom_agent_bind_signal (void)
 }
 
 static gchar *
-get_blacklist_from_json (const gchar *data)
+get_list_from_json (const gchar *data, const gchar *property)
 {
 	g_return_val_if_fail (data != NULL, NULL);
 
@@ -665,7 +748,7 @@ get_blacklist_from_json (const gchar *data)
 		if (obj4) {
 			const char *val = json_object_get_string (obj4);
 			if (val && g_strcmp0 (val, "200") == 0) {
-				json_object *obj = JSON_OBJECT_GET (obj3, "black_list");
+				json_object *obj = JSON_OBJECT_GET (obj3, property);
 				ret = g_strdup (json_object_get_string (obj));
 			}
 		}
@@ -676,13 +759,14 @@ get_blacklist_from_json (const gchar *data)
 }
 
 static void
-request_app_blacklist_done_cb (GObject      *source_object,
-                               GAsyncResult *res,
-                               gpointer      user_data)
+request_done_cb (GObject      *source_object,
+                 GAsyncResult *res,
+                 gpointer      user_data)
 {
 	GVariant *variant;
 	gchar *data = NULL;
 
+	const gchar *arg = (const gchar *)user_data;
 	variant = g_dbus_proxy_call_finish (G_DBUS_PROXY (source_object), res, NULL);
 	if (variant) {
 		GVariant *v;
@@ -695,12 +779,36 @@ request_app_blacklist_done_cb (GObject      *source_object,
 	}
 
 	if (data) {
-		gchar *blacklist = get_blacklist_from_json (data);
-		if (blacklist) {
-			save_app_blacklist (blacklist);
-			g_free (blacklist);
+		gchar *list = get_list_from_json (data, arg);
+		if (list) {
+			save_list (list, arg);
+			g_free (list);
 		}
 		g_free (data);
+	}
+}
+
+static void
+controlcenter_whitelist_update (void)
+{
+	if (!g_agent_proxy)
+		g_agent_proxy = proxy_get ("agent");
+
+	if (g_agent_proxy) {
+		const gchar *json = "{\"module\":{\"module_name\":\"config\",\"task\":{\"task_name\":\"get_controlcenter_items\",\"in\":{\"login_id\":\"%s\"}}}}";
+
+		gchar *arg = g_strdup_printf (json, g_get_user_name ());
+
+		g_dbus_proxy_call (g_agent_proxy,
+				"do_task",
+				g_variant_new ("(s)", arg),
+				G_DBUS_CALL_FLAGS_NONE,
+				-1,
+				NULL,
+				request_done_cb,
+				"controlcenter_items");
+
+		g_free (arg);
 	}
 }
 
@@ -721,8 +829,8 @@ app_blacklist_update (void)
 				G_DBUS_CALL_FLAGS_NONE,
 				-1,
 				NULL,
-				request_app_blacklist_done_cb,
-				NULL);
+				request_done_cb,
+				"black_list");
 
 		g_free (arg);
 	}
@@ -744,7 +852,6 @@ start_job_on_online (void)
 	if (g_file_test (file, G_FILE_TEST_EXISTS)) {
 		/* configure desktop */
 		handle_desktop_configuration ();
-		app_blacklist_update ();
 	} else {
 		GtkWidget *message = gtk_message_dialog_new (NULL,
 				GTK_DIALOG_MODAL,
@@ -781,13 +888,17 @@ start_job (gpointer data)
 	if (is_online_user (g_get_user_name ()))
 		start_job_on_online ();
 
+	app_blacklist_update ();
+	controlcenter_whitelist_update ();
+
 	/* reload grac service */
 	dpms_off_time_set ();
 	gooroom_agent_bind_signal ();
 	gooroom_grac_bind_signal ();
+
 	reload_grac_service ();
 
-	g_timeout_add (1000 * 3, (GSourceFunc)kill_splash, NULL);
+//	g_timeout_add (1000 * 3, (GSourceFunc)kill_splash, NULL);
 
 	return FALSE;
 }
@@ -831,6 +942,11 @@ main (int argc, char **argv)
                               NULL);
 
 	gtk_main ();
+
+//	if (grac_notifications) {
+//		grac_notifications_close (grac_notifications);
+//		g_list_free_full (grac_notifications, g_object_unref);
+//	}
 
 	if (g_agent_proxy)
 		g_object_unref (g_agent_proxy);
