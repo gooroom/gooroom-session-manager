@@ -488,13 +488,16 @@ save_list (gchar *list, const gchar *id)
 
 	schema = g_settings_schema_source_lookup (g_settings_schema_source_get_default (), schema_name, TRUE);
 
-	if (schema)
+	if (schema) {
 		settings = g_settings_new_full (schema, NULL, NULL);
+	}
 
 	if (settings) {
-		gchar **filters = g_strsplit (list, ",", -1);
-		g_settings_set_strv (settings, key, (const char * const *) filters);
-		g_strfreev (filters);
+		if (g_settings_schema_has_key (schema, key)) {
+			gchar **filters = g_strsplit (list, ",", -1);
+			g_settings_set_strv (settings, key, (const char * const *) filters);
+			g_strfreev (filters);
+		}
 		g_object_unref (settings);
 	}
 }
@@ -606,11 +609,10 @@ grac_signal_cb (GDBusProxy *proxy,
                 GVariant *parameters,
                 gpointer user_data)
 {
-	gchar *msg = NULL;
+	gchar *data = NULL;
+	GVariant *v = NULL;
 
 	if (g_str_equal (signal_name, "grac_letter")) {
-		gchar *data = NULL;
-		GVariant *v = NULL;
 		g_variant_get (parameters, "(v)", &v);
 		if (v) {
 			data = g_variant_dup_string (v, NULL);
@@ -619,40 +621,24 @@ grac_signal_cb (GDBusProxy *proxy,
 
 		if (data) {
 			do_resource_access_control (data);
-			msg  = g_strdup (data);
 			g_free (data);
 		}
 	} else if (g_str_equal (signal_name, "grac_noti")) {
-		gchar *data = NULL;
-		if (g_variant_is_of_type (parameters, G_VARIANT_TYPE_STRING)) {
-			const char *s;
-			g_variant_get (parameters, "(&s)", &s);
-			if (s) {
-				data = g_strdup (s);
-			}
-		} else if (g_variant_is_of_type (parameters, G_VARIANT_TYPE_VARIANT)) {
-			GVariant *v = NULL;
-			g_variant_get (parameters, "(v)", &v);
-			if (v) {
-				data = g_variant_dup_string (v, NULL);
-				g_variant_unref (v);
-			}
+		g_variant_get (parameters, "(v)", &v);
+		if (v) {
+			data = g_variant_dup_string (v, NULL);
+			g_variant_unref (v);
 		}
 
 		if (data) {
 			gchar **infos = g_strsplit (data, ":", -1);
-			msg = g_strdup (infos[1]);
-			g_free (data);
-
+			show_notification (_("Gooroom Resource Access Control"), infos[1], "dialog-information");
 			g_strfreev (infos);
+			g_free (data);
 		}
 	} else {
 		return;
 	}
-
-	show_notification (_("Gooroom Resource Access Control"), msg, "dialog-information");
-
-	g_free (msg);
 }
 
 static void
@@ -836,6 +822,30 @@ app_blacklist_update (void)
 	}
 }
 
+static void
+send_request_to_gooroom_agent (const gchar *request)
+{
+	if (!g_agent_proxy)
+		g_agent_proxy = proxy_get ("agent");
+
+	if (g_agent_proxy) {
+		const gchar *json = "{\"module\":{\"module_name\":\"config\",\"task\":{\"task_name\":\"%s\",\"in\":{\"login_id\":\"%s\"}}}}";
+
+		gchar *arg = g_strdup_printf (json, request, g_get_user_name ());
+
+		g_dbus_proxy_call (g_agent_proxy,
+				"do_task",
+				g_variant_new ("(s)", arg),
+				G_DBUS_CALL_FLAGS_NONE,
+				-1,
+				NULL,
+				NULL,
+				NULL);
+
+		g_free (arg);
+	}
+}
+
 static gboolean
 logout_session_cb (gpointer data)
 {
@@ -885,8 +895,18 @@ kill_splash (gpointer data)
 static gboolean
 start_job (gpointer data)
 {
-	if (is_online_user (g_get_user_name ()))
+	if (is_online_user (g_get_user_name ())) {
 		start_job_on_online ();
+
+		/* request to save resource access rule for GOOROOM system */
+		send_request_to_gooroom_agent ("set_authority_config");
+
+		/* request to check blocking packages change */
+		send_request_to_gooroom_agent ("get_update_operation_with_loginid");
+	} else {
+		/* request to save resource access rule for GOOROOM system */
+		send_request_to_gooroom_agent ("set_authority_config_local");
+	}
 
 	app_blacklist_update ();
 	controlcenter_whitelist_update ();
