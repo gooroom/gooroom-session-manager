@@ -39,6 +39,7 @@
 #include <libnotify/notify.h>
 
 #define	GRM_USER		        ".grm-user"
+#define	BACKGROUND_PATH         "/usr/share/backgrounds/gooroom/"
 #define	DEFAULT_BACKGROUND      "/usr/share/images/desktop-base/desktop-background.xml"
 
 
@@ -204,96 +205,85 @@ get_dpms_off_time_from_json (const gchar *data)
 	return ret;
 }
 
-static gboolean
-download_with_wget (const gchar *download_url, const gchar *download_path)
-{
-	gboolean ret = FALSE;
-
-	if (!download_url || !download_path)
-		return FALSE;
-
-	gchar *cmd = g_find_program_in_path ("wget");
-	if (cmd) {
-		gchar *cmdline = g_strdup_printf ("%s --no-check-certificate %s -q -O %s", cmd, download_url, download_path);
-		ret = g_spawn_command_line_sync (cmdline, NULL, NULL, NULL, NULL);
-		g_free (cmdline);
-	}
-	g_free (cmd);
-
-	return ret;
-}
-
-static gchar *
-download_background (const gchar *download_url)
-{
-	g_return_val_if_fail (download_url != NULL, NULL);
-
-	gchar *name, *download_path = NULL;
-
-	name = g_uuid_string_random ();
-
-	download_path = g_build_filename (g_get_user_cache_dir (),
-                                      "gnome-control-center",
-                                      "backgrounds", name, NULL);
-
-	if (!download_with_wget (download_url, download_path))
-		goto error;
-
-	// check file size
-	struct stat st;
-	if (lstat (download_path, &st) == -1)
-		goto error;
-
-	if (st.st_size == 0)
-		goto error;
-
-	return download_path;
-
-error:
-	g_free (download_path);
-
-	return g_strdup (DEFAULT_BACKGROUND);
-}
+//static gboolean
+//download_with_wget (const gchar *download_url, const gchar *download_path)
+//{
+//	gboolean ret = FALSE;
+//
+//	if (!download_url || !download_path)
+//		return FALSE;
+//
+//	gchar *cmd = g_find_program_in_path ("wget");
+//	if (cmd) {
+//		gchar *cmdline = g_strdup_printf ("%s --no-check-certificate %s -q -O %s", cmd, download_url, download_path);
+//		ret = g_spawn_command_line_sync (cmdline, NULL, NULL, NULL, NULL);
+//		g_free (cmdline);
+//	}
+//	g_free (cmd);
+//
+//	return ret;
+//}
+//
+//static gchar *
+//download_background (const gchar *download_url)
+//{
+//	g_return_val_if_fail (download_url != NULL, NULL);
+//
+//	gchar *name, *download_path = NULL;
+//
+//	name = g_uuid_string_random ();
+//
+//	download_path = g_build_filename (g_get_user_cache_dir (),
+//                                      "gnome-control-center",
+//                                      "backgrounds", name, NULL);
+//
+//	if (!download_with_wget (download_url, download_path))
+//		goto error;
+//
+//	// check file size
+//	struct stat st;
+//	if (lstat (download_path, &st) == -1)
+//		goto error;
+//
+//	if (st.st_size == 0)
+//		goto error;
+//
+//	return download_path;
+//
+//error:
+//	g_free (download_path);
+//
+//	return g_strdup (DEFAULT_BACKGROUND);
+//}
 
 static void
-set_icon_theme (const gchar *icon_theme)
+set_theme (const gchar *theme_idx)
 {
-	g_return_if_fail (icon_theme != NULL);
+	g_return_if_fail (theme_idx != NULL);
 
 	GSettings *settings;
+	const gchar *icon_theme, *background;
+
+	if (g_str_equal (theme_idx, "1")) {
+		icon_theme = "Gooroom-Arc";
+		background = BACKGROUND_PATH"gooroom_theme_bg_1.png";
+	} else if (g_str_equal (theme_idx, "2")) {
+		icon_theme = "Gooroom-Faenza";
+		background = BACKGROUND_PATH"gooroom_theme_bg_2.png";
+	} else if (g_str_equal (theme_idx, "3")) {
+		icon_theme = "Gooroom-Papirus";
+		background = BACKGROUND_PATH"gooroom_theme_bg_3.png";
+	} else {
+		icon_theme = "Gooroom-Papirus";
+		background = BACKGROUND_PATH"gooroom_theme_bg_3.png";
+	}
+
+	if (!g_file_test (background, G_FILE_TEST_EXISTS))
+		background = DEFAULT_BACKGROUND;
 
 	settings = g_settings_new ("org.gnome.desktop.interface");
 	g_settings_set_string (settings, "icon-theme", icon_theme);
 	g_object_unref (settings);
-}
-
-static void
-set_desktop_screensaver_background (const char *wallpaper_name, const gchar *wallpaper_uri)
-{
-	GSettings *settings;
-	GFile *dest = NULL;
-	gchar *path, *background = NULL;
-
-	if (!wallpaper_uri) {
-		path = g_strdup (DEFAULT_BACKGROUND);
-		goto done;
-	}
-
-	if (g_str_has_prefix (wallpaper_uri, "http://") ||
-        g_str_has_prefix (wallpaper_uri, "https://")) {
-		path = download_background (wallpaper_uri);
-	} else {
-		path = g_strdup (wallpaper_uri);
-	}
-
-	if (!g_file_test (path, G_FILE_TEST_EXISTS))
-		path = g_strdup (DEFAULT_BACKGROUND);
-
-done:
-	dest = g_file_new_for_path (path);
-	background = g_file_get_uri (dest);
-	g_free (path);
-	g_object_unref (dest);
 
 	settings = g_settings_new ("org.gnome.desktop.background");
 	g_settings_set_string (settings, "picture-uri", background);
@@ -302,8 +292,6 @@ done:
 	settings = g_settings_new ("org.gnome.desktop.screensaver");
 	g_settings_set_string (settings, "picture-uri", background);
 	g_object_unref (settings);
-
-	g_free (background);
 }
 
 static void
@@ -315,26 +303,16 @@ handle_desktop_configuration (void)
 		enum json_tokener_error jerr = json_tokener_success;
 		json_object *root_obj = json_tokener_parse_verbose (data, &jerr);
 		if (jerr == json_tokener_success) {
-			json_object *obj1 = NULL, *obj2 = NULL, *obj3_1 = NULL, *obj3_2 = NULL, *obj3_3 = NULL;
+			json_object *obj1 = NULL, *obj2 = NULL, *obj2_1;
 			obj1 = JSON_OBJECT_GET (root_obj, "data");
 			obj2 = JSON_OBJECT_GET (obj1, "desktopInfo");
-			obj3_1 = JSON_OBJECT_GET (obj2, "themeNm");
-			obj3_2 = JSON_OBJECT_GET (obj2, "wallpaperNm");
-			obj3_3 = JSON_OBJECT_GET (obj2, "wallpaperFile");
+			obj2_1 = JSON_OBJECT_GET (obj2, "themeId");
 
-			if (obj3_1) {
-				const char *icon_theme = json_object_get_string (obj3_1);
+			if (obj2_1) {
+				const char *theme_idx = json_object_get_string (obj2_1);
 
 				/* set icon theme */
-				set_icon_theme (icon_theme);
-			}
-
-			if (obj3_2 && obj3_3) {
-				const char *wallpaper_name = json_object_get_string (obj3_2);
-				const char *wallpaper_uri = json_object_get_string (obj3_3);
-
-				/* set wallpaper */
-				set_desktop_screensaver_background (wallpaper_name, wallpaper_uri);
+				set_theme (theme_idx);
 			}
 
 			json_object_put (root_obj);
