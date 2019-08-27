@@ -138,8 +138,8 @@ dpms_off_time_update (gint32 value)
 {
 	gint32 val;
 
-	val = value < 0 ? 0 : value;
-	val = value > 3600 ? 3600 : value;
+	val = (value < 0) ? 0 : value * 60;
+	val = (value * 60 > G_MAXUINT) ? G_MAXUINT : value * 60;
 
 	GSettings *settings;
 
