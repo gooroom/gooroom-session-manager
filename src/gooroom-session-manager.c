@@ -46,7 +46,6 @@
 static guint name_id = 0;
 static GDBusProxy *g_grac_proxy = NULL;
 static GDBusProxy *g_agent_proxy = NULL;
-//static GList *grac_notifications = NULL;
 
 
 
@@ -66,6 +65,26 @@ show_notification (const gchar *summary, const gchar *message, const gchar *icon
 	notify_notification_show (notification, NULL);
 
 	g_object_unref (notification);
+}
+
+static gboolean
+is_cloud_user (const gchar *username)
+{
+	gboolean ret = FALSE;
+
+	struct passwd *entry = getpwnam (username);
+	if (entry) {
+		gchar **tokens = g_strsplit (entry->pw_gecos, ",", -1);
+		if (g_strv_length (tokens) > 4 ) {
+			if (tokens[4] && ((g_strcmp0 (tokens[4], "google-account") == 0) ||
+                              (g_strcmp0 (tokens[4], "naver-account") == 0))) {
+				ret = TRUE;
+			}
+		}
+		g_strfreev (tokens);
+	}
+
+	return ret;
 }
 
 static gboolean
@@ -205,57 +224,6 @@ get_dpms_off_time_from_json (const gchar *data)
 	return ret;
 }
 
-//static gboolean
-//download_with_wget (const gchar *download_url, const gchar *download_path)
-//{
-//	gboolean ret = FALSE;
-//
-//	if (!download_url || !download_path)
-//		return FALSE;
-//
-//	gchar *cmd = g_find_program_in_path ("wget");
-//	if (cmd) {
-//		gchar *cmdline = g_strdup_printf ("%s --no-check-certificate %s -q -O %s", cmd, download_url, download_path);
-//		ret = g_spawn_command_line_sync (cmdline, NULL, NULL, NULL, NULL);
-//		g_free (cmdline);
-//	}
-//	g_free (cmd);
-//
-//	return ret;
-//}
-//
-//static gchar *
-//download_background (const gchar *download_url)
-//{
-//	g_return_val_if_fail (download_url != NULL, NULL);
-//
-//	gchar *name, *download_path = NULL;
-//
-//	name = g_uuid_string_random ();
-//
-//	download_path = g_build_filename (g_get_user_cache_dir (),
-//                                      "gnome-control-center",
-//                                      "backgrounds", name, NULL);
-//
-//	if (!download_with_wget (download_url, download_path))
-//		goto error;
-//
-//	// check file size
-//	struct stat st;
-//	if (lstat (download_path, &st) == -1)
-//		goto error;
-//
-//	if (st.st_size == 0)
-//		goto error;
-//
-//	return download_path;
-//
-//error:
-//	g_free (download_path);
-//
-//	return g_strdup (DEFAULT_BACKGROUND);
-//}
-
 static void
 set_theme (const gchar *theme_idx)
 {
@@ -266,16 +234,16 @@ set_theme (const gchar *theme_idx)
 
 	if (g_str_equal (theme_idx, "1")) {
 		icon_theme = "Gooroom-Arc";
-		background = BACKGROUND_PATH"gooroom_theme_bg_1.png";
+		background = BACKGROUND_PATH"gooroom_theme_bg_1.jpg";
 	} else if (g_str_equal (theme_idx, "2")) {
 		icon_theme = "Gooroom-Faenza";
-		background = BACKGROUND_PATH"gooroom_theme_bg_2.png";
+		background = BACKGROUND_PATH"gooroom_theme_bg_2.jpg";
 	} else if (g_str_equal (theme_idx, "3")) {
 		icon_theme = "Gooroom-Papirus";
-		background = BACKGROUND_PATH"gooroom_theme_bg_3.png";
+		background = BACKGROUND_PATH"gooroom_theme_bg_3.jpg";
 	} else {
 		icon_theme = "Gooroom-Papirus";
-		background = BACKGROUND_PATH"gooroom_theme_bg_3.png";
+		background = BACKGROUND_PATH"gooroom_theme_bg_3.jpg";
 	}
 
 	if (!g_file_test (background, G_FILE_TEST_EXISTS))
@@ -489,34 +457,6 @@ grac_notifications_close (GList *list)
 		if (n) notify_notification_close (n, NULL);
 	}
 }
-
-//static gboolean
-//grac_notifications_lookup (GList *list, const gchar *find_str)
-//{
-//	GList *l = NULL;
-//	for (l = list; l; l = l->next) {
-//		NotifyNotification *n = (NotifyNotification *)l->data;
-//		if (n) {
-//			const gchar *name = g_object_get_data (G_OBJECT (n), "grmcode");
-//			if (name) {
-//				if (g_str_equal (name, find_str))
-//					return TRUE;
-//			}
-//		}
-//	}
-//
-//	return FALSE;
-//}
-//
-//static void
-//on_grac_notification_closed_cb (NotifyNotification *n, gpointer data)
-//{
-//	if (grac_notifications) {
-//		grac_notifications = g_list_remove (grac_notifications, n);
-//		g_object_unref (n);
-//		n = NULL;
-//	}
-//}
 
 #ifdef GRAC_DEBUG
 #define GRAC_LOG(fmt, args...) g_print("[%s] " fmt, __func__, ##args)
@@ -862,13 +802,13 @@ start_job_on_online (void)
 	g_free (file);
 }
 
-static gboolean
-kill_splash (gpointer data)
-{
+//static gboolean
+//kill_splash (gpointer data)
+//{
 //	g_spawn_command_line_async (KILL_GOOROOM_SPLASH, NULL);
-
-	return FALSE;
-}
+//
+//	return FALSE;
+//}
 
 static gboolean
 start_job (gpointer data)
@@ -940,11 +880,6 @@ main (int argc, char **argv)
                               NULL);
 
 	gtk_main ();
-
-//	if (grac_notifications) {
-//		grac_notifications_close (grac_notifications);
-//		g_list_free_full (grac_notifications, g_object_unref);
-//	}
 
 	if (g_agent_proxy)
 		g_object_unref (g_agent_proxy);
