@@ -2,7 +2,7 @@ dnl ***************************
 dnl *** Initialize autoconf ***
 dnl ***************************
 AC_INIT([gooroom-session-manager], [0.1.0])
-AC_PREREQ(2.53)
+AC_PREREQ(2.63)
 
 dnl ***********************
 dnl Initialize automake ***
@@ -20,12 +20,12 @@ AC_PROG_CC
 AM_PROG_CC_C_O
 AC_PROG_LD()
 AC_PROG_INSTALL()
-IT_PROG_INTLTOOL([0.35.0])
+IT_PROG_INTLTOOL([0.35.2])
 
 dnl **********************
 dnl Initialize libtool ***
 dnl **********************
-LT_PREREQ([2.2.6])
+LT_PREREQ([2.4])
 LT_INIT([disable-static])
 
 dnl **********************************

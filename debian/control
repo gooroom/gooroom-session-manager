@@ -1,7 +1,7 @@
 Source: gooroom-session-manager
 Section: misc
 Priority: optional
-Maintainer: gooroom <gooroom@gooroom.kr>
+Maintainer: Gooroom Maintainers <gooroom@gooroom.kr>
 Build-Depends: automake (>= 1.13),
                debhelper (>= 10),
                gnome-pkg-tools (>= 0.17),
@@ -23,4 +23,4 @@ Package: gooroom-session-manager
 Architecture: any
 Depends: ${shlibs:Depends},
          ${misc:Depends},
-Description: Manager for configuring gooroom environment.
+Description: Session manager for the Gooroom environment.
