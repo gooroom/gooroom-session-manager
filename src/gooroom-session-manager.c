@@ -45,6 +45,7 @@
 
 static guint name_id = 0;
 static GDBusProxy *g_grac_proxy = NULL;
+static GDBusProxy *g_hsmd_proxy = NULL;
 static GDBusProxy *g_agent_proxy = NULL;
 
 
@@ -188,6 +189,15 @@ proxy_get (const char *id)
 				"kr.gooroom.GRACDEVD",
 				"/kr/gooroom/GRACDEVD",
 				"kr.gooroom.GRACDEVD",
+				NULL,
+				NULL);
+	} else if (g_str_equal (id, "hsmd")) {
+		proxy = g_dbus_proxy_new_for_bus_sync (G_BUS_TYPE_SYSTEM,
+				G_DBUS_CALL_FLAGS_NONE,
+				NULL,
+				"kr.gooroom.HSMD",
+				"/kr/gooroom/HSMD",
+				"kr.gooroom.HSMD",
 				NULL,
 				NULL);
 	}
@@ -560,6 +570,17 @@ grac_signal_cb (GDBusProxy *proxy,
 }
 
 static void
+hsmd_signal_cb (GDBusProxy *proxy,
+                gchar *sender_name,
+                gchar *signal_name,
+                GVariant *parameters,
+                gpointer user_data)
+{
+	if (g_str_equal (signal_name, "onLogoutSignal"))
+		g_spawn_command_line_async ("systemd-run systemctl restart lightdm.service", NULL);
+}
+
+static void
 agent_signal_cb (GDBusProxy *proxy,
                  gchar *sender_name,
                  gchar *signal_name,
@@ -621,6 +642,16 @@ gooroom_grac_bind_signal (void)
 
 	if (g_grac_proxy)
 		g_signal_connect (g_grac_proxy, "g-signal", G_CALLBACK (grac_signal_cb), NULL);
+}
+
+static void
+gooroom_hsmd_bind_signal (void)
+{
+	if (!g_hsmd_proxy)
+		g_hsmd_proxy = proxy_get ("hsmd");
+
+	if (g_hsmd_proxy)
+		g_signal_connect (g_hsmd_proxy, "g-signal", G_CALLBACK (hsmd_signal_cb), NULL);
 }
 
 static void
@@ -825,6 +856,7 @@ start_job (gpointer data)
 	dpms_off_time_set ();
 	gooroom_agent_bind_signal ();
 	gooroom_grac_bind_signal ();
+	gooroom_hsmd_bind_signal ();
 
 	reload_grac_service ();
 
