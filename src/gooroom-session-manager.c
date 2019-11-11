@@ -259,17 +259,21 @@ set_theme (const gchar *theme_idx)
 	if (!g_file_test (background, G_FILE_TEST_EXISTS))
 		background = DEFAULT_BACKGROUND;
 
+	gchar *bg_file = g_strdup_printf ("file://%s", background);
+
 	settings = g_settings_new ("org.gnome.desktop.interface");
 	g_settings_set_string (settings, "icon-theme", icon_theme);
 	g_object_unref (settings);
 
 	settings = g_settings_new ("org.gnome.desktop.background");
-	g_settings_set_string (settings, "picture-uri", background);
+	g_settings_set_string (settings, "picture-uri", bg_file);
 	g_object_unref (settings);
 
 	settings = g_settings_new ("org.gnome.desktop.screensaver");
-	g_settings_set_string (settings, "picture-uri", background);
+	g_settings_set_string (settings, "picture-uri", bg_file);
 	g_object_unref (settings);
+
+	g_free (bg_file);
 }
 
 static void
