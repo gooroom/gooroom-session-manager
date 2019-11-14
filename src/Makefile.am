@@ -1,11 +1,16 @@
-pkglibexec_PROGRAMS = gooroom-session-manager kill-gooroom-splash
+pkglibexec_PROGRAMS = \
+	gooroom-session-manager \
+	grac-reload-helper \
+	gooroom-update-blacklist-helper
 
 gooroom_session_manager_SOURCES = \
+	panel-glib.c \
 	gooroom-session-manager.c
 
 gooroom_session_manager_CFLAGS = \
 	-DGNOMELOCALEDIR=\"$(localedir)\"	\
-	-DKILL_GOOROOM_SPLASH=\"$(pkglibexecdir)/kill-gooroom-splash\"  \
+	-DGRAC_RELOAD_HELPER=\"$(pkglibexecdir)/grac-reload-helper\"  \
+	-DGOOROOM_UPDATE_BLACKLIST_HELPER=\"$(pkglibexecdir)/gooroom-update-blacklist-helper\"  \
 	$(GTK_CFLAGS) 		\
 	$(GLIB_CFLAGS) 	\
     $(JSON_C_CFLAGS)    \
@@ -24,15 +29,23 @@ gooroom_session_manager_LDADD = \
 gooroom_session_manager_LDFLAGS = \
 	-export-dynamic
 
-kill_gooroom_splash_SOURCES = \
-	kill-gooroom-splash.c
+grac_reload_helper_SOURCES = \
+	grac-reload-helper.c
 
-kill_gooroom_splash_CFLAGS = \
-	$(GLIB_CFLAGS)
+grac_reload_helper_CFLAGS = \
+	$(GIO_CFLAGS)
 
-kill_gooroom_splash_LDADD = \
-	$(GLIB_LIBS)
+grac_reload_helper_LDFLAGS = \
+	$(GIO_LIBS)
 
-install-exec-hook:
-	chown root "$(DESTDIR)$(pkglibexecdir)/kill-gooroom-splash"
-	chmod +s "$(DESTDIR)$(pkglibexecdir)/kill-gooroom-splash"
+gooroom_update_blacklist_helper_SOURCES = \
+	panel-glib.c	\
+	gooroom-update-blacklist-helper.c
+
+gooroom_update_blacklist_helper_CFLAGS = \
+	$(GLIB_CFLAGS) \
+	$(GIO_UNIX_CFLAGS)
+
+gooroom_update_blacklist_helper_LDFLAGS = \
+	$(GLIB_LIBS) \
+	$(GIO_UNIX_LIBS)

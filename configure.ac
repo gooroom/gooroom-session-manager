@@ -47,6 +47,8 @@ dnl *** Check for required packages ***
 dnl ***********************************
 PKG_CHECK_MODULES(GTK, gtk+-3.0 >= 3.20.0)
 PKG_CHECK_MODULES(GLIB, glib-2.0 >= 2.44.0)
+PKG_CHECK_MODULES(GIO, gio-2.0 >= 2.58.3)
+PKG_CHECK_MODULES(GIO_UNIX, gio-unix-2.0)
 PKG_CHECK_MODULES(JSON_C, json-c)
 PKG_CHECK_MODULES(DBUS_GLIB, dbus-glib-1 >= 0.84)
 PKG_CHECK_MODULES(LIBNOTIFY, libnotify)

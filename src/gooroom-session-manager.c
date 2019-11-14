@@ -35,8 +35,11 @@
 #include <gtk/gtk.h>
 #include <glib/gi18n.h>
 #include <glib/gstdio.h>
+#include <gio/gdesktopappinfo.h>
 
 #include <libnotify/notify.h>
+
+#include "panel-glib.h"
 
 #define	GRM_USER		        ".grm-user"
 #define	BACKGROUND_PATH         "/usr/share/backgrounds/gooroom/"
@@ -44,10 +47,11 @@
 
 
 static guint name_id = 0;
+static GSettings  *blacklist_settings = NULL;
+static GSettings  *whitelist_settings = NULL;
 static GDBusProxy *g_grac_proxy = NULL;
-static GDBusProxy *g_hsmd_proxy = NULL;
 static GDBusProxy *g_agent_proxy = NULL;
-
+static gulong update_blacklist_timeout_id = 0;
 
 
 static void
@@ -107,22 +111,6 @@ is_online_user (const gchar *username)
 	return ret;
 }
 
-static gboolean
-authenticate (const gchar *action_id)
-{
-	GPermission *permission;
-	permission = polkit_permission_new_sync (action_id, NULL, NULL, NULL);
-
-	if (!g_permission_get_allowed (permission)) {
-		if (g_permission_acquire (permission, NULL, NULL)) {
-			return TRUE;
-		}
-		return FALSE;
-	}
-
-	return TRUE;
-}
-
 json_object *
 JSON_OBJECT_GET (json_object *root_obj, const char *key)
 {
@@ -151,6 +139,91 @@ error:
 	g_free (file);
 
 	return data;
+}
+
+static gboolean
+update_blacklist (gchar **blacklist)
+{
+	gchar *pkexec, *cmdline;
+
+	pkexec = g_find_program_in_path ("pkexec");
+
+	if (blacklist) {
+		gchar *str_blacklist = g_strjoinv (" ", blacklist);
+		cmdline = g_strdup_printf ("%s %s %s", pkexec, GOOROOM_UPDATE_BLACKLIST_HELPER, str_blacklist);
+		g_free (str_blacklist);
+	} else {
+		cmdline = g_strdup_printf ("%s %s", pkexec, GOOROOM_UPDATE_BLACKLIST_HELPER);
+	}
+
+	g_spawn_command_line_sync (cmdline, NULL, NULL, NULL, NULL);
+
+	g_free (pkexec);
+	g_free (cmdline);
+	g_strfreev (blacklist);
+
+	if (update_blacklist_timeout_id) {
+		g_source_remove (update_blacklist_timeout_id);
+		update_blacklist_timeout_id = 0;
+	}
+
+	return FALSE;
+}
+
+static gchar *
+find_desktop_id (const gchar *find_str)
+{
+	gchar *ret = NULL;
+	GList *all_apps = NULL, *l = NULL;
+
+	if (!find_str || g_str_equal (find_str, ""))
+		return NULL;
+
+	all_apps = g_app_info_get_all ();
+
+	for (l = all_apps; l; l = l->next) {
+		GAppInfo *appinfo = G_APP_INFO (l->data);
+		if (appinfo)
+			continue;
+
+		const gchar *id;
+		GDesktopAppInfo *dt_info;
+		gchar *locale_name, *name, *exec;
+
+		dt_info = G_DESKTOP_APP_INFO (appinfo);
+
+		id = g_app_info_get_id (appinfo);
+		if (g_str_equal (id, find_str))
+			goto find;
+
+		name = g_desktop_app_info_get_string (dt_info, G_KEY_FILE_DESKTOP_KEY_NAME);
+		if (name && ((g_utf8_collate (name, find_str) == 0) || (panel_g_utf8_strstrcase (name, find_str) != NULL))) {
+			goto find;
+		}
+
+		locale_name = g_desktop_app_info_get_locale_string (dt_info, G_KEY_FILE_DESKTOP_KEY_NAME);
+		if (locale_name && ((g_utf8_collate (locale_name, find_str) == 0) || (panel_g_utf8_strstrcase (locale_name, find_str) != NULL))) {
+			goto find;
+		}
+
+		exec = g_desktop_app_info_get_string (dt_info, G_KEY_FILE_DESKTOP_KEY_EXEC);
+		if (exec && ((g_utf8_collate (exec, find_str) == 0) || (panel_g_utf8_strstrcase (exec, find_str) != NULL))) {
+			goto find;
+		}
+		continue;
+
+find:
+		ret = g_strdup (g_desktop_app_info_get_filename (dt_info));
+
+		g_free (name);
+		g_free (locale_name);
+		g_free (exec);
+		break;
+	}
+
+	g_list_free_full (all_apps, g_object_unref);
+
+	return ret;
 }
 
 static void
@@ -191,16 +264,7 @@ proxy_get (const char *id)
 				"kr.gooroom.GRACDEVD",
 				NULL,
 				NULL);
-	} else if (g_str_equal (id, "hsmd")) {
-		proxy = g_dbus_proxy_new_for_bus_sync (G_BUS_TYPE_SYSTEM,
-				G_DBUS_CALL_FLAGS_NONE,
-				NULL,
-				"kr.gooroom.HSMD",
-				"/kr/gooroom/HSMD",
-				"kr.gooroom.HSMD",
-				NULL,
-				NULL);
-	}
+	} 
 
 	return proxy;
 }
@@ -305,51 +369,28 @@ handle_desktop_configuration (void)
 }
 
 static void
+grac_reload_done_cb (GPid pid, gint status, gpointer data)
+{
+	g_spawn_close_pid (pid);
+}
+
+static void
 reload_grac_service (void)
 {
-	if (!authenticate ("kr.gooroom.SessionManager.systemctl"))
-		return;
+	GPid pid;
+	gchar *cmd;
+	gchar **argv; 
+	GError *error = NULL;
 
-	GDBusProxy  *proxy = NULL;
-//	gboolean     success = FALSE;
-	const gchar *service_name = "grac-device-daemon.service";
+	cmd = g_strdup_printf ("/usr/bin/pkexec %s", GRAC_RELOAD_HELPER);
 
-	proxy = g_dbus_proxy_new_for_bus_sync (G_BUS_TYPE_SYSTEM,
-			G_DBUS_CALL_FLAGS_NONE,
-			NULL,
-			"org.freedesktop.systemd1",
-			"/org/freedesktop/systemd1",
-			"org.freedesktop.systemd1.Manager",
-			NULL, NULL);
+	g_shell_parse_argv (cmd, NULL, &argv, NULL);
 
-	if (proxy) {
-		GVariant *variant = NULL;
-		variant = g_dbus_proxy_call_sync (proxy, "ReloadUnit",
-				g_variant_new ("(ss)", service_name, "replace"),
-				G_DBUS_CALL_FLAGS_NONE, -1, NULL, NULL);
+	if (g_spawn_async (NULL, argv, NULL, G_SPAWN_DO_NOT_REAP_CHILD, NULL, NULL, &pid, NULL))
+		g_child_watch_add (pid, (GChildWatchFunc) grac_reload_done_cb, NULL);
 
-		if (variant) {
-			g_variant_unref (variant);
-//			success = TRUE;
-		}
-
-		g_object_unref (proxy);
-	}
-
-//	if (!success) {
-//		GtkWidget *dlg = gtk_message_dialog_new (NULL,
-//				GTK_DIALOG_MODAL,
-//				GTK_MESSAGE_INFO,
-//				GTK_BUTTONS_CLOSE,
-//				NULL);
-//
-//		const gchar *secondary_text = _("Failed to restart GRAC service.\nPlease login again.");
-//		gtk_window_set_title (GTK_WINDOW (dlg), _("GRAC Service Start Failure"));
-//		gtk_message_dialog_format_secondary_text (GTK_MESSAGE_DIALOG (dlg), "%s", secondary_text);
-//		g_signal_connect (dlg, "response", G_CALLBACK (gtk_widget_destroy), NULL);
-//
-//		gtk_widget_show (dlg);
-//	}
+	g_free (cmd);
+	g_strfreev (argv);
 }
 
 static void
@@ -434,32 +475,38 @@ save_list (gchar *list, const gchar *id)
 {
 	g_return_if_fail (list != NULL);
 
-	const gchar *schema_name, *key;
 	GSettings *settings = NULL;
 	GSettingsSchema *schema = NULL;
+	const gchar *schema_name, *key;
 
 	if (g_str_equal (id, "black_list")) {
-		schema_name = "apps.gooroom-applauncher-applet";
 		key = "blacklist";
+		schema_name = "apps.gooroom-applauncher-applet";
+		settings = blacklist_settings;
 	} else if (g_str_equal (id, "controlcenter_items")) {
-		schema_name = "org.gnome.ControlCenter";
 		key = "whitelist-panels";
+		schema_name = "org.gnome.ControlCenter";
+		settings = whitelist_settings;
+	} else {
+		key = NULL;
+		schema_name = NULL;
+		settings = NULL;
 	}
 
-	schema = g_settings_schema_source_lookup (g_settings_schema_source_get_default (), schema_name, TRUE);
+	if (!key || !schema_name || !settings)
+		return;
 
-	if (schema) {
-		settings = g_settings_new_full (schema, NULL, NULL);
-	}
+	gchar **filters = g_strsplit (list, ",", -1);
 
-	if (settings) {
-		if (g_settings_schema_has_key (schema, key)) {
-			gchar **filters = g_strsplit (list, ",", -1);
-			g_settings_set_strv (settings, key, (const char * const *) filters);
-			g_strfreev (filters);
-		}
-		g_object_unref (settings);
-	}
+	schema = g_settings_schema_source_lookup (g_settings_schema_source_get_default (),
+                                              schema_name, TRUE);
+
+	if (g_settings_schema_has_key (schema, key))
+		g_settings_set_strv (settings, key, (const char * const *) filters);
+
+	g_strfreev (filters);
+
+	g_settings_schema_unref (schema);
 }
 
 static void
@@ -574,17 +621,6 @@ grac_signal_cb (GDBusProxy *proxy,
 }
 
 static void
-hsmd_signal_cb (GDBusProxy *proxy,
-                gchar *sender_name,
-                gchar *signal_name,
-                GVariant *parameters,
-                gpointer user_data)
-{
-	if (g_str_equal (signal_name, "onLogoutSignal"))
-		g_spawn_command_line_async ("systemd-run systemctl restart lightdm.service", NULL);
-}
-
-static void
 agent_signal_cb (GDBusProxy *proxy,
                  gchar *sender_name,
                  gchar *signal_name,
@@ -646,16 +682,6 @@ gooroom_grac_bind_signal (void)
 
 	if (g_grac_proxy)
 		g_signal_connect (g_grac_proxy, "g-signal", G_CALLBACK (grac_signal_cb), NULL);
-}
-
-static void
-gooroom_hsmd_bind_signal (void)
-{
-	if (!g_hsmd_proxy)
-		g_hsmd_proxy = proxy_get ("hsmd");
-
-	if (g_hsmd_proxy)
-		g_signal_connect (g_hsmd_proxy, "g-signal", G_CALLBACK (hsmd_signal_cb), NULL);
 }
 
 static void
@@ -728,7 +754,7 @@ request_done_cb (GObject      *source_object,
 }
 
 static void
-controlcenter_whitelist_update (void)
+controlcenter_whitelist_get (void)
 {
 	if (!g_agent_proxy)
 		g_agent_proxy = proxy_get ("agent");
@@ -752,7 +778,7 @@ controlcenter_whitelist_update (void)
 }
 
 static void
-app_blacklist_update (void)
+app_blacklist_get (void)
 {
 	if (!g_agent_proxy)
 		g_agent_proxy = proxy_get ("agent");
@@ -772,6 +798,19 @@ app_blacklist_update (void)
 				"black_list");
 
 		g_free (arg);
+	}
+}
+
+static void
+gooroom_blacklist_settings_changed (GSettings *settings,
+                                    const gchar *key,
+                                    gpointer data)
+{
+	if(g_str_equal (key, "blacklist")) {
+		if (update_blacklist_timeout_id == 0) {
+			gchar **blacklist = g_settings_get_strv (settings, key);
+			update_blacklist_timeout_id = g_idle_add ((GSourceFunc) update_blacklist, blacklist);
+		}
 	}
 }
 
@@ -802,7 +841,7 @@ send_request_to_gooroom_agent (const gchar *request)
 static gboolean
 logout_session_cb (gpointer data)
 {
-	g_spawn_command_line_async ("systemd-run systemctl restart lightdm.service", NULL);
+	g_spawn_command_line_async ("/usr/bin/gnome-session-quit --logout --force", NULL);
 
 	return FALSE;
 }
@@ -840,6 +879,8 @@ start_job_on_online (void)
 static gboolean
 start_job (gpointer data)
 {
+	GSettingsSchema *schema;
+
 	if (is_online_user (g_get_user_name ())) {
 		start_job_on_online ();
 
@@ -853,16 +894,32 @@ start_job (gpointer data)
 		send_request_to_gooroom_agent ("set_authority_config_local");
 	}
 
-	app_blacklist_update ();
-	controlcenter_whitelist_update ();
-
 	/* reload grac service */
 	dpms_off_time_set ();
 	gooroom_agent_bind_signal ();
 	gooroom_grac_bind_signal ();
-	gooroom_hsmd_bind_signal ();
 
 	reload_grac_service ();
+
+	schema = g_settings_schema_source_lookup (g_settings_schema_source_get_default (),
+                                              "apps.gooroom-applauncher-applet", TRUE);
+	if (schema)
+		blacklist_settings = g_settings_new_full (schema, NULL, NULL);
+
+	g_settings_schema_unref (schema);
+
+	g_signal_connect (G_OBJECT (blacklist_settings), "changed::",
+                      G_CALLBACK (gooroom_blacklist_settings_changed), NULL);
+
+	schema = g_settings_schema_source_lookup (g_settings_schema_source_get_default (),
+                                              "org.gnome.ControlCenter", TRUE);
+	if (schema)
+		whitelist_settings = g_settings_new_full (schema, NULL, NULL);
+
+	g_settings_schema_unref (schema);
+
+	controlcenter_whitelist_get ();
+	app_blacklist_get ();
 
 	return FALSE;
 }
@@ -872,8 +929,9 @@ name_acquired_handler (GDBusConnection *connection,
                        const gchar     *name,
                        gpointer         user_data)
 {
-	g_idle_add ((GSourceFunc) start_job, NULL);
+	update_blacklist (NULL);
 
+	g_idle_add ((GSourceFunc) start_job, NULL);
 }
 
 static void
@@ -907,11 +965,23 @@ main (int argc, char **argv)
 
 	gtk_main ();
 
+	if (update_blacklist_timeout_id) {
+		g_source_remove (update_blacklist_timeout_id);
+		update_blacklist_timeout_id = 0;
+	}
+
 	if (g_agent_proxy)
 		g_object_unref (g_agent_proxy);
 
 	if (g_grac_proxy)
 		g_object_unref (g_grac_proxy);
+
+	if(blacklist_settings)
+		g_object_unref (blacklist_settings);
+
+	if(whitelist_settings)
+		g_object_unref (whitelist_settings);
+
 
 	return 0;
 }

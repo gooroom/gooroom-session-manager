@@ -7,7 +7,7 @@ msgid ""
 msgstr ""
 "Project-Id-Version: gooroom-session-manager 0.1.0\n"
 "Report-Msgid-Bugs-To: \n"
-"POT-Creation-Date: 2019-10-14 19:43+0900\n"
+"POT-Creation-Date: 2019-11-14 17:48+0900\n"
 "Language-Team: Gooroom <gooroom@gooroom.kr>\n"
 "Language: ko\n"
 "MIME-Version: 1.0\n"
@@ -15,27 +15,27 @@ msgstr ""
 "Content-Transfer-Encoding: 8bit\n"
 "Plural-Forms: nplurals=1; plural=0;\n"
 
-#: ../src/gooroom-session-manager.c:95
+#: ../src/gooroom-session-manager.c:63
 msgid "Notification"
 msgstr "알림"
 
-#: ../src/gooroom-session-manager.c:445
+#: ../src/gooroom-session-manager.c:454
 msgid "Update Blocking Function"
 msgstr "업데이트 차단 기능"
 
-#: ../src/gooroom-session-manager.c:448
+#: ../src/gooroom-session-manager.c:457
 msgid "Update blocking function has been disabled."
 msgstr "업데이트 차단 기능이 비활성화 되었습니다."
 
-#: ../src/gooroom-session-manager.c:451
+#: ../src/gooroom-session-manager.c:460
 msgid "Update blocking function has been enabled."
 msgstr "업데이트 차단 기능이 활성화 되었습니다."
 
-#: ../src/gooroom-session-manager.c:599
+#: ../src/gooroom-session-manager.c:614
 msgid "Gooroom Resource Access Control"
 msgstr "구름 자원 접근 제어"
 
-#: ../src/gooroom-session-manager.c:858
+#: ../src/gooroom-session-manager.c:865
 msgid ""
 "Could not found user's settings file.\n"
 "After 10 seconds, the user will be logged out."
@@ -43,14 +43,18 @@ msgstr ""
 "사용자 환경설정 파일을 찾을 수 없습니다.\n"
 "10초 후 로그아웃 됩니다."
 
-#: ../src/gooroom-session-manager.c:860
+#: ../src/gooroom-session-manager.c:867
 msgid "Terminating Session"
 msgstr "세션 종료"
 
-#: ../data/kr.gooroom.SessionManager.policy.in.h:1
+#: ../data/kr.gooroom.SessionManager.policy.in.in.h:1
 msgid "Gooroom Session Manager"
-msgstr "Gooroom Session Manager"
+msgstr "구름 세션 관리"
 
-#: ../data/kr.gooroom.SessionManager.policy.in.h:2
-msgid "Authentication is required to control systemd-service."
-msgstr "Authentication is required to control systemd-service."
+#: ../data/kr.gooroom.SessionManager.policy.in.in.h:2
+msgid "Authentication is required to reload Grac Device Daemon."
+msgstr "구름자원접근제어 서비스 실행을 위해 인증이 필요합니다."
+
+#: ../data/kr.gooroom.SessionManager.policy.in.in.h:3
+msgid "Authentication is required to update blacklist."
+msgstr "블랙리스트 적용을 위해 인증이 필요합니다."

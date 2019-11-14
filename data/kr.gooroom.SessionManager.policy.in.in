@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE policyconfig PUBLIC
+"-//freedesktop//DTD PolicyKit Policy Configuration 1.0//EN"
+"http://www.freedesktop.org/standards/PolicyKit/1/policyconfig.dtd">
+<policyconfig>
+  <vendor>The Gooroom Project</vendor>
+
+  <action id="kr.gooroom.SessionManager.grac-reload">
+    <_description>Gooroom Session Manager</_description>
+    <_message>Authentication is required to reload Grac Device Daemon.</_message>
+    <defaults>
+      <allow_any>no</allow_any>
+      <allow_inactive>no</allow_inactive>
+      <allow_active>yes</allow_active>
+    </defaults>
+    <annotate key="org.freedesktop.policykit.exec.path">@pkglibexecdir@/grac-reload-helper</annotate>
+  </action>
+
+  <action id="kr.gooroom.SessionManager.update-blacklist">
+    <_description>Gooroom Session Manager</_description>
+    <_message>Authentication is required to update blacklist.</_message>
+    <defaults>
+      <allow_any>no</allow_any>
+      <allow_inactive>no</allow_inactive>
+      <allow_active>yes</allow_active>
+    </defaults>
+    <annotate key="org.freedesktop.policykit.exec.path">@pkglibexecdir@/gooroom-update-blacklist-helper</annotate>
+  </action>
+</policyconfig>
