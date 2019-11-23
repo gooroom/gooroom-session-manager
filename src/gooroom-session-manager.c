@@ -44,14 +44,14 @@
 #define	GRM_USER		        ".grm-user"
 #define	BACKGROUND_PATH         "/usr/share/backgrounds/gooroom/"
 #define	DEFAULT_BACKGROUND      "/usr/share/images/desktop-base/desktop-background.xml"
+#define GCSR_CONF               "/etc/gooroom/gooroom-client-server-register/gcsr.conf"
 
 
-static guint name_id = 0;
-static GSettings  *blacklist_settings = NULL;
-static GSettings  *whitelist_settings = NULL;
+static GSettings  *g_blacklist_settings = NULL;
+static GSettings  *g_whitelist_settings = NULL;
 static GDBusProxy *g_grac_proxy = NULL;
 static GDBusProxy *g_agent_proxy = NULL;
-static gulong update_blacklist_timeout_id = 0;
+static guint owner_id = 0, watch_id = 0, timeout_id = 0;
 
 
 static void
@@ -93,7 +93,7 @@ is_cloud_user (const gchar *username)
 }
 
 static gboolean
-is_online_user (const gchar *username)
+is_gpms_user (const gchar *username)
 {
 	gboolean ret = FALSE;
 
@@ -110,6 +110,27 @@ is_online_user (const gchar *username)
 
 	return ret;
 }
+
+static gboolean
+registered_gpms (void)
+{
+	gchar *glm = NULL;
+	gboolean ret = FALSE;
+	GKeyFile *keyfile = NULL;
+
+	keyfile = g_key_file_new ();
+	if (g_key_file_load_from_file (keyfile, GCSR_CONF, G_KEY_FILE_KEEP_COMMENTS, NULL)) {
+		glm  = g_key_file_get_string (keyfile, "domain", "glm", NULL);
+	}
+
+	ret = (glm != NULL) ? TRUE : FALSE;
+
+	g_free (glm);
+	g_key_file_free (keyfile);
+
+	return ret;
+}
+
 
 json_object *
 JSON_OBJECT_GET (json_object *root_obj, const char *key)
@@ -128,7 +149,7 @@ get_grm_user_data (void)
 {
 	gchar *data, *file = NULL;
 
-	file = g_strdup_printf ("/var/run/user/%d/gooroom/%s", getuid (), GRM_USER);
+	file = g_strdup_printf ("%s/.gooroom/%s", g_get_home_dir (), GRM_USER);
 
 	if (!g_file_test (file, G_FILE_TEST_EXISTS))
 		goto error;
@@ -144,28 +165,22 @@ error:
 static gboolean
 update_blacklist (gchar **blacklist)
 {
-	gchar *pkexec, *cmdline;
+	gchar *pkexec, *cmd;
 
 	pkexec = g_find_program_in_path ("pkexec");
 
 	if (blacklist) {
 		gchar *str_blacklist = g_strjoinv (" ", blacklist);
-		cmdline = g_strdup_printf ("%s %s %s", pkexec, GOOROOM_UPDATE_BLACKLIST_HELPER, str_blacklist);
+		cmd = g_strdup_printf ("%s %s %s", pkexec, GOOROOM_UPDATE_BLACKLIST_HELPER, str_blacklist);
 		g_free (str_blacklist);
 	} else {
-		cmdline = g_strdup_printf ("%s %s", pkexec, GOOROOM_UPDATE_BLACKLIST_HELPER);
+		cmd = g_strdup_printf ("%s %s", pkexec, GOOROOM_UPDATE_BLACKLIST_HELPER);
 	}
 
-	g_spawn_command_line_sync (cmdline, NULL, NULL, NULL, NULL);
+	g_spawn_command_line_sync (cmd, NULL, NULL, NULL, NULL);
 
 	g_free (pkexec);
-	g_free (cmdline);
-	g_strfreev (blacklist);
-
-	if (update_blacklist_timeout_id) {
-		g_source_remove (update_blacklist_timeout_id);
-		update_blacklist_timeout_id = 0;
-	}
+	g_free (cmd);
 
 	return FALSE;
 }
@@ -394,6 +409,12 @@ reload_grac_service (void)
 }
 
 static void
+gooroom_agent_start_done_cb (GPid pid, gint status, gpointer data)
+{
+	g_spawn_close_pid (pid);
+}
+
+static void
 request_dpms_off_time_done_cb (GObject      *source_object,
                                GAsyncResult *res,
                                gpointer      user_data)
@@ -421,7 +442,7 @@ request_dpms_off_time_done_cb (GObject      *source_object,
 }
 
 static void
-dpms_off_time_set (void)
+set_dpms_off_time (void)
 {
 	if (!g_agent_proxy)
 		g_agent_proxy = proxy_get ("agent");
@@ -482,11 +503,11 @@ save_list (gchar *list, const gchar *id)
 	if (g_str_equal (id, "black_list")) {
 		key = "blacklist";
 		schema_name = "apps.gooroom-applauncher-applet";
-		settings = blacklist_settings;
+		settings = g_blacklist_settings;
 	} else if (g_str_equal (id, "controlcenter_items")) {
 		key = "whitelist-panels";
 		schema_name = "org.gnome.ControlCenter";
-		settings = whitelist_settings;
+		settings = g_whitelist_settings;
 	} else {
 		key = NULL;
 		schema_name = NULL;
@@ -675,7 +696,7 @@ agent_signal_cb (GDBusProxy *proxy,
 }
 
 static void
-gooroom_grac_bind_signal (void)
+bind_grac_signal (void)
 {
 	if (!g_grac_proxy)
 		g_grac_proxy = proxy_get ("grac");
@@ -685,7 +706,7 @@ gooroom_grac_bind_signal (void)
 }
 
 static void
-gooroom_agent_bind_signal (void)
+bind_gooroom_agent_signal (void)
 {
 	if (!g_agent_proxy)
 		g_agent_proxy = proxy_get ("agent");
@@ -724,6 +745,13 @@ get_list_from_json (const gchar *data, const gchar *property)
 }
 
 static void
+restart_dockbarx_done_cb (GObject      *source_object,
+                          GAsyncResult *res,
+                          gpointer      user_data)
+{
+}
+
+static void
 request_done_cb (GObject      *source_object,
                  GAsyncResult *res,
                  gpointer      user_data)
@@ -754,7 +782,7 @@ request_done_cb (GObject      *source_object,
 }
 
 static void
-controlcenter_whitelist_get (void)
+update_controlcenter_whitelist (void)
 {
 	if (!g_agent_proxy)
 		g_agent_proxy = proxy_get ("agent");
@@ -778,7 +806,7 @@ controlcenter_whitelist_get (void)
 }
 
 static void
-app_blacklist_get (void)
+update_app_blacklist (void)
 {
 	if (!g_agent_proxy)
 		g_agent_proxy = proxy_get ("agent");
@@ -801,16 +829,73 @@ app_blacklist_get (void)
 	}
 }
 
+static gboolean
+update_blacklist_and_restart_dockbarx (gpointer user_data)
+{
+	GDBusProxy *proxy = NULL;
+
+	gchar **blacklist = (gchar **)user_data;
+
+	update_blacklist (blacklist);
+	g_strfreev (blacklist);
+
+	proxy = g_dbus_proxy_new_for_bus_sync (G_BUS_TYPE_SESSION,
+				G_DBUS_CALL_FLAGS_NONE,
+				NULL,
+				"kr.gooroom.dockbarx.applet",
+				"/kr/gooroom/dockbarx/applet",
+				"kr.gooroom.dockbarx.applet",
+				NULL,
+				NULL);
+
+	if (proxy == NULL) {
+		g_warning ("Failed to get dockbarx applet proxy");
+		return FALSE;
+	}
+
+	g_dbus_proxy_call (proxy,
+                       "Restart", g_variant_new ("()"),
+                       G_DBUS_CALL_FLAGS_NONE,
+                       -1,
+                       NULL,
+                       restart_dockbarx_done_cb,
+                       NULL);
+
+	g_clear_object (&proxy);
+
+	if (timeout_id > 0) {
+		g_source_remove (timeout_id);
+		timeout_id = 0;
+	}
+
+	return FALSE;
+}
+
 static void
 gooroom_blacklist_settings_changed (GSettings *settings,
                                     const gchar *key,
                                     gpointer data)
 {
-	if(g_str_equal (key, "blacklist")) {
-		if (update_blacklist_timeout_id == 0) {
+	if (g_str_equal (key, "blacklist")) {
+		if (timeout_id == 0) {
 			gchar **blacklist = g_settings_get_strv (settings, key);
-			update_blacklist_timeout_id = g_idle_add ((GSourceFunc) update_blacklist, blacklist);
+			timeout_id = g_idle_add ((GSourceFunc) update_blacklist_and_restart_dockbarx, blacklist);
 		}
+	}
+}
+
+static void
+send_request_to_gooroom_agent_done_cb (GObject      *source_object,
+                                       GAsyncResult *res,
+                                       gpointer      user_data)
+{
+	gchar *arg = (gchar *)user_data;
+
+	if (g_str_equal (arg, "set_authority_config") ||
+        g_str_equal (arg, "set_authority_config_local"))
+	{
+		/* reload grac service */
+		reload_grac_service ();
 	}
 }
 
@@ -831,8 +916,8 @@ send_request_to_gooroom_agent (const gchar *request)
 				G_DBUS_CALL_FLAGS_NONE,
 				-1,
 				NULL,
-				NULL,
-				NULL);
+                send_request_to_gooroom_agent_done_cb,
+				(gchar *)request);
 
 		g_free (arg);
 	}
@@ -841,87 +926,72 @@ send_request_to_gooroom_agent (const gchar *request)
 static gboolean
 logout_session_cb (gpointer data)
 {
-	g_spawn_command_line_async ("/usr/bin/gnome-session-quit --logout --force", NULL);
+	g_spawn_command_line_async ("/usr/bin/gooroom-logout-command --logout", NULL);
 
 	return FALSE;
 }
 
 static void
-start_job_on_online (void)
+terminate_session (void)
 {
-	gchar *file = g_strdup_printf ("/var/run/user/%d/gooroom/%s", getuid (), GRM_USER);
+	GtkWidget *message = gtk_message_dialog_new (NULL,
+                                                 GTK_DIALOG_MODAL,
+                                                 GTK_MESSAGE_ERROR,
+                                                 GTK_BUTTONS_OK,
+                                                 NULL);
 
-	if (g_file_test (file, G_FILE_TEST_EXISTS)) {
-		/* configure desktop */
-		handle_desktop_configuration ();
-	} else {
-		GtkWidget *message = gtk_message_dialog_new (NULL,
-				GTK_DIALOG_MODAL,
-				GTK_MESSAGE_ERROR,
-				GTK_BUTTONS_OK,
-				NULL);
+	gtk_message_dialog_format_secondary_text (GTK_MESSAGE_DIALOG (message),
+			_("Could not found user's settings file.\nAfter 10 seconds, the user will be logged out."));
 
-		gtk_message_dialog_format_secondary_text (GTK_MESSAGE_DIALOG (message),
-				_("Could not found user's settings file.\nAfter 10 seconds, the user will be logged out."));
+	gtk_window_set_title (GTK_WINDOW (message), _("Terminating Session"));
 
-		gtk_window_set_title (GTK_WINDOW (message), _("Terminating Session"));
+	g_signal_connect (message, "response", G_CALLBACK (gtk_widget_destroy), NULL);
 
-		g_signal_connect (message, "response", G_CALLBACK (gtk_widget_destroy), NULL);
+	g_timeout_add (1000 * 10, (GSourceFunc) logout_session_cb, NULL);
 
-		g_timeout_add (1000 * 10, (GSourceFunc) logout_session_cb, NULL);
-
-		gtk_widget_show (message);
-	}
-
-	g_free (file);
+	gtk_widget_show (message);
 }
 
-static gboolean
-start_job (gpointer data)
+static void
+gooroom_agent_name_vanished_cb (GDBusConnection *connection,
+                                const gchar     *name,
+                                gpointer         data)
 {
-	GSettingsSchema *schema;
+	g_warning ("Gooroom Agent Service is not running");
 
-	if (is_online_user (g_get_user_name ())) {
-		start_job_on_online ();
+	if (watch_id) {
+		g_bus_unwatch_name (watch_id);
+		watch_id = 0;
+	}
+}
 
-		/* request to save resource access rule for GOOROOM system */
-		send_request_to_gooroom_agent ("set_authority_config");
+static void
+gooroom_agent_name_appeared_cb (GDBusConnection *connection,
+                                const gchar     *name,
+                                const gchar     *name_owner,
+                                gpointer         data)
+{
+	const gchar *req_arg;
 
-		/* request to check blocking packages change */
-		send_request_to_gooroom_agent ("get_update_operation_with_loginid");
-	} else {
-		/* request to save resource access rule for GOOROOM system */
-		send_request_to_gooroom_agent ("set_authority_config_local");
+	if (watch_id) {
+		g_bus_unwatch_name (watch_id);
+		watch_id = 0;
 	}
 
-	/* reload grac service */
-	dpms_off_time_set ();
-	gooroom_agent_bind_signal ();
-	gooroom_grac_bind_signal ();
+	req_arg = is_gpms_user (g_get_user_name ()) ? "set_authority_config" : "set_authority_config_local";
 
-	reload_grac_service ();
+	/* request to save GRAC's rule for Gooroom */
+	send_request_to_gooroom_agent (req_arg);
 
-	schema = g_settings_schema_source_lookup (g_settings_schema_source_get_default (),
-                                              "apps.gooroom-applauncher-applet", TRUE);
-	if (schema)
-		blacklist_settings = g_settings_new_full (schema, NULL, NULL);
+	/* request to check blocking packages change */
+	send_request_to_gooroom_agent ("get_update_operation_with_loginid");
 
-	g_settings_schema_unref (schema);
+	set_dpms_off_time ();
 
-	g_signal_connect (G_OBJECT (blacklist_settings), "changed::",
-                      G_CALLBACK (gooroom_blacklist_settings_changed), NULL);
+	update_controlcenter_whitelist ();
+	update_app_blacklist ();
 
-	schema = g_settings_schema_source_lookup (g_settings_schema_source_get_default (),
-                                              "org.gnome.ControlCenter", TRUE);
-	if (schema)
-		whitelist_settings = g_settings_new_full (schema, NULL, NULL);
-
-	g_settings_schema_unref (schema);
-
-	controlcenter_whitelist_get ();
-	app_blacklist_get ();
-
-	return FALSE;
+	bind_gooroom_agent_signal ();
 }
 
 static void
@@ -929,9 +999,59 @@ name_acquired_handler (GDBusConnection *connection,
                        const gchar     *name,
                        gpointer         user_data)
 {
+	gchar *grm_user = NULL;
+	GSettingsSchema *schema = NULL;
+
+	grm_user = g_strdup_printf ("%s/.gooroom/%s", g_get_home_dir (), GRM_USER);
+
+	if (is_gpms_user (g_get_user_name ())) {
+		if (!g_file_test (grm_user, G_FILE_TEST_EXISTS)) {
+			terminate_session ();
+			goto done;
+		}
+
+		/* configure icon-theme and background */
+		handle_desktop_configuration ();
+	}
+
+	/* initialize blacklist */
 	update_blacklist (NULL);
 
-	g_idle_add ((GSourceFunc) start_job, NULL);
+	schema = g_settings_schema_source_lookup (g_settings_schema_source_get_default (),
+                                              "apps.gooroom-applauncher-applet", TRUE);
+	if (schema) {
+		g_blacklist_settings = g_settings_new_full (schema, NULL, NULL);
+		g_signal_connect (G_OBJECT (g_blacklist_settings), "changed",
+                          G_CALLBACK (gooroom_blacklist_settings_changed), NULL);
+		g_settings_schema_unref (schema);
+	}
+
+	schema = g_settings_schema_source_lookup (g_settings_schema_source_get_default (),
+                                              "org.gnome.ControlCenter", TRUE);
+	if (schema) {
+		g_whitelist_settings = g_settings_new_full (schema, NULL, NULL);
+		g_settings_schema_unref (schema);
+	}
+
+	if (registered_gpms ()) {
+		watch_id = g_bus_watch_name (G_BUS_TYPE_SYSTEM,
+                                     "kr.gooroom.agent",
+                                     G_BUS_NAME_WATCHER_FLAGS_NONE,
+                                     gooroom_agent_name_appeared_cb,
+                                     gooroom_agent_name_vanished_cb,
+                                     NULL, NULL);
+	} else {
+		if (timeout_id == 0) {
+			gchar **blacklist = g_settings_get_strv (g_blacklist_settings, "blacklist");
+			timeout_id = g_idle_add ((GSourceFunc) update_blacklist_and_restart_dockbarx, blacklist);
+		}
+	}
+
+	bind_grac_signal ();
+
+
+done:
+	g_free (grm_user);
 }
 
 static void
@@ -954,20 +1074,30 @@ main (int argc, char **argv)
 
 	gtk_init (&argc, &argv);
 
-	name_id = g_bus_own_name (G_BUS_TYPE_SESSION,
-                              "kr.gooroom.SessionManager",
-                              G_BUS_NAME_OWNER_FLAGS_NONE,
-                              NULL,
-                              (GBusNameAcquiredCallback) name_acquired_handler,
-                              (GBusNameLostCallback) name_lost_handler,
-                              NULL,
-                              NULL);
+	owner_id = g_bus_own_name (G_BUS_TYPE_SESSION,
+                               "kr.gooroom.SessionManager",
+                               G_BUS_NAME_OWNER_FLAGS_NONE,
+                               NULL,
+                               (GBusNameAcquiredCallback) name_acquired_handler,
+                               (GBusNameLostCallback) name_lost_handler,
+                               NULL,
+                               NULL);
 
 	gtk_main ();
 
-	if (update_blacklist_timeout_id) {
-		g_source_remove (update_blacklist_timeout_id);
-		update_blacklist_timeout_id = 0;
+	if (timeout_id > 0) {
+		g_source_remove (timeout_id);
+		timeout_id = 0;
+	}
+
+	if (watch_id) {
+		g_bus_unwatch_name (watch_id);
+		watch_id = 0;
+	}
+
+	if (owner_id) {
+		g_bus_unown_name (owner_id);
+		owner_id = 0;
 	}
 
 	if (g_agent_proxy)
@@ -976,11 +1106,11 @@ main (int argc, char **argv)
 	if (g_grac_proxy)
 		g_object_unref (g_grac_proxy);
 
-	if(blacklist_settings)
-		g_object_unref (blacklist_settings);
+	if(g_blacklist_settings)
+		g_object_unref (g_blacklist_settings);
 
-	if(whitelist_settings)
-		g_object_unref (whitelist_settings);
+	if(g_whitelist_settings)
+		g_object_unref (g_whitelist_settings);
 
 
 	return 0;

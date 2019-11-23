@@ -1,5 +1,5 @@
-Format: http://www.debian.org/doc/packaging-manuals/copyright-format/1.0/
-Source: http://git.gooroom.kr/gooroom-session-service
+Format: https://www.debian.org/doc/packaging-manuals/copyright-format/1.0/
+Source: https://github.com/gooroom/gooroom-session-manager
 
 Files: *
 Copyright: 2015-2019 Gooroom <gooroom@gooroom.kr>
