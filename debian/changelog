@@ -1,3 +1,33 @@
+gooroom-session-manager (0.1.1+grm2u1) unstable; urgency=medium
+
+  [ cjheo ]
+  * [d3cf334a] Update #1
+  * [801cb095] Update #2
+  * [45724d53] Modify the string "gooroom-online-account"
+  * [1d5a4ce1] Added control panel whitelist management and the ability to show notifications from GRAC
+  * [ffd6fee8] Add code to send command to gooroom-agent
+  * [a4b74c6d] Modify the code to set the theme
+  * [f973990d] Fixed bug related to the screensaver settings(from minutes to seconds)
+  * [0faefd98] Change thee wallpaper extension for themes
+
+  [ hmkim ]
+  * [39dd478e] It added dbus signal bindings for the sound/microphone access control of the grac and for alarm messages of the agent.
+
+  [ Heo, ChangJu ]
+  * [781680ec] Revert "It added dbus signal bindings for the sound/microphone access control of the grac and for alarm messages of the agent."
+  * [9dd39f00] Revert "Revert "It added dbus signal bindings for the sound/microphone access control of the grac and for alarm messages of the agent.""
+
+  [ user ]
+  * [3537eba6] Update sources regarding copyright
+  * [f592b47e] Binds the DBUS signal of the Hardware Security Module Daemon(hsmd)
+  * [e7100300] Added "file://" prefix when specifying the wallpaper
+  * [18d0085c] Improved blacklist handling
+  * [2e71a881] File path for .grm-user has changed
+
+  [ Gooroom Autobuilder ]
+
+ -- Gooroom Autobuilder <jenkins@gooroom.kr>  Sun, 01 Dec 2019 19:22:42 +0900
+
 gooroom-session-manager (0.1.0) unstable; urgency=medium
 
   * Initial Release.
