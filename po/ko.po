@@ -7,7 +7,7 @@ msgid ""
 msgstr ""
 "Project-Id-Version: gooroom-session-manager 0.1.0\n"
 "Report-Msgid-Bugs-To: \n"
-"POT-Creation-Date: 2019-11-14 17:48+0900\n"
+"POT-Creation-Date: 2020-01-03 19:09+0900\n"
 "Language-Team: Gooroom <gooroom@gooroom.kr>\n"
 "Language: ko\n"
 "MIME-Version: 1.0\n"
@@ -15,27 +15,27 @@ msgstr ""
 "Content-Transfer-Encoding: 8bit\n"
 "Plural-Forms: nplurals=1; plural=0;\n"
 
-#: ../src/gooroom-session-manager.c:63
+#: ../src/gooroom-session-manager.c:69
 msgid "Notification"
 msgstr "알림"
 
-#: ../src/gooroom-session-manager.c:454
+#: ../src/gooroom-session-manager.c:469
 msgid "Update Blocking Function"
 msgstr "업데이트 차단 기능"
 
-#: ../src/gooroom-session-manager.c:457
+#: ../src/gooroom-session-manager.c:472
 msgid "Update blocking function has been disabled."
 msgstr "업데이트 차단 기능이 비활성화 되었습니다."
 
-#: ../src/gooroom-session-manager.c:460
+#: ../src/gooroom-session-manager.c:475
 msgid "Update blocking function has been enabled."
 msgstr "업데이트 차단 기능이 활성화 되었습니다."
 
-#: ../src/gooroom-session-manager.c:614
+#: ../src/gooroom-session-manager.c:629
 msgid "Gooroom Resource Access Control"
 msgstr "구름 자원 접근 제어"
 
-#: ../src/gooroom-session-manager.c:865
+#: ../src/gooroom-session-manager.c:1022
 msgid ""
 "Could not found user's settings file.\n"
 "After 10 seconds, the user will be logged out."
@@ -43,7 +43,7 @@ msgstr ""
 "사용자 환경설정 파일을 찾을 수 없습니다.\n"
 "10초 후 로그아웃 됩니다."
 
-#: ../src/gooroom-session-manager.c:867
+#: ../src/gooroom-session-manager.c:1024
 msgid "Terminating Session"
 msgstr "세션 종료"
 

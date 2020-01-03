@@ -51,7 +51,13 @@ static GSettings  *g_blacklist_settings = NULL;
 static GSettings  *g_whitelist_settings = NULL;
 static GDBusProxy *g_grac_proxy = NULL;
 static GDBusProxy *g_agent_proxy = NULL;
-static guint owner_id = 0, watch_id = 0, timeout_id = 0;
+static guint g_gda_watch_id = 0;
+static guint g_owner_id = 0, g_timeout_id = 0;
+static guint g_agent_signal_id = 0, g_grac_signal_id = 0;
+static gboolean g_agent_name_appeared = FALSE;
+
+static void gooroom_blacklist_settings_changed (GSettings *settings, const gchar *key, gpointer data);
+
 
 
 static void
@@ -73,26 +79,6 @@ show_notification (const gchar *summary, const gchar *message, const gchar *icon
 }
 
 static gboolean
-is_cloud_user (const gchar *username)
-{
-	gboolean ret = FALSE;
-
-	struct passwd *entry = getpwnam (username);
-	if (entry) {
-		gchar **tokens = g_strsplit (entry->pw_gecos, ",", -1);
-		if (g_strv_length (tokens) > 4 ) {
-			if (tokens[4] && ((g_strcmp0 (tokens[4], "google-account") == 0) ||
-                              (g_strcmp0 (tokens[4], "naver-account") == 0))) {
-				ret = TRUE;
-			}
-		}
-		g_strfreev (tokens);
-	}
-
-	return ret;
-}
-
-static gboolean
 is_gpms_user (const gchar *username)
 {
 	gboolean ret = FALSE;
@@ -107,6 +93,95 @@ is_gpms_user (const gchar *username)
 		}
 		g_strfreev (tokens);
 	}
+
+	return ret;
+}
+
+static gboolean
+get_object_path (gchar **object_path, const gchar *service_name)
+{
+	GVariant   *variant;
+	GDBusProxy *proxy;
+	GError     *error = NULL;
+
+	proxy = g_dbus_proxy_new_for_bus_sync (G_BUS_TYPE_SYSTEM,
+			G_DBUS_CALL_FLAGS_NONE, NULL,
+			"org.freedesktop.systemd1",
+			"/org/freedesktop/systemd1",
+			"org.freedesktop.systemd1.Manager",
+			NULL, &error);
+
+	if (!proxy) {
+		g_error_free (error);
+		return FALSE;
+	}
+
+	variant = g_dbus_proxy_call_sync (proxy, "GetUnit",
+			g_variant_new ("(s)", service_name),
+			G_DBUS_CALL_FLAGS_NONE, -1, NULL, &error);
+
+	if (!variant) {
+		g_error_free (error);
+	} else {
+		g_variant_get (variant, "(o)", object_path);
+		g_variant_unref (variant);
+	}
+
+	g_object_unref (proxy);
+
+	return TRUE;
+}
+
+
+static gboolean
+is_systemd_service_active (const gchar *service_name)
+{
+	gboolean ret = FALSE;
+
+	GVariant   *variant;
+	GDBusProxy *proxy;
+	GError     *error = NULL;
+	gchar      *obj_path = NULL;
+
+	get_object_path (&obj_path, service_name);
+	if (!obj_path) {
+		goto done;
+	}
+
+	proxy = g_dbus_proxy_new_for_bus_sync (G_BUS_TYPE_SYSTEM,
+			G_DBUS_CALL_FLAGS_NONE, NULL,
+			"org.freedesktop.systemd1",
+			obj_path,
+			"org.freedesktop.DBus.Properties",
+			NULL, &error);
+
+	if (!proxy)
+		goto done;
+
+	variant = g_dbus_proxy_call_sync (proxy, "GetAll",
+			g_variant_new ("(s)", "org.freedesktop.systemd1.Unit"),
+			G_DBUS_CALL_FLAGS_NONE, -1, NULL, &error);
+
+	if (variant) {
+		gchar *output = NULL;
+		GVariant *asv = g_variant_get_child_value(variant, 0);
+		GVariant *value = g_variant_lookup_value(asv, "ActiveState", NULL);
+		if(value && g_variant_is_of_type(value, G_VARIANT_TYPE_STRING)) {
+			output = g_variant_dup_string(value, NULL);
+			if (g_strcmp0 (output, "active") == 0) {
+				ret = TRUE;;
+			}
+			g_free (output);
+		}
+
+		g_variant_unref (variant);
+	}
+
+	g_object_unref (proxy);
+
+done:
+	if (error)
+		g_error_free (error);
 
 	return ret;
 }
@@ -160,85 +235,6 @@ error:
 	g_free (file);
 
 	return data;
-}
-
-static gboolean
-update_blacklist (gchar **blacklist)
-{
-	gchar *pkexec, *cmd;
-
-	pkexec = g_find_program_in_path ("pkexec");
-
-	if (blacklist) {
-		gchar *str_blacklist = g_strjoinv (" ", blacklist);
-		cmd = g_strdup_printf ("%s %s %s", pkexec, GOOROOM_UPDATE_BLACKLIST_HELPER, str_blacklist);
-		g_free (str_blacklist);
-	} else {
-		cmd = g_strdup_printf ("%s %s", pkexec, GOOROOM_UPDATE_BLACKLIST_HELPER);
-	}
-
-	g_spawn_command_line_sync (cmd, NULL, NULL, NULL, NULL);
-
-	g_free (pkexec);
-	g_free (cmd);
-
-	return FALSE;
-}
-
-static gchar *
-find_desktop_id (const gchar *find_str)
-{
-	gchar *ret = NULL;
-	GList *all_apps = NULL, *l = NULL;
-
-	if (!find_str || g_str_equal (find_str, ""))
-		return NULL;
-
-	all_apps = g_app_info_get_all ();
-
-	for (l = all_apps; l; l = l->next) {
-		GAppInfo *appinfo = G_APP_INFO (l->data);
-		if (appinfo)
-			continue;
-
-		const gchar *id;
-		GDesktopAppInfo *dt_info;
-		gchar *locale_name, *name, *exec;
-
-		dt_info = G_DESKTOP_APP_INFO (appinfo);
-
-		id = g_app_info_get_id (appinfo);
-		if (g_str_equal (id, find_str))
-			goto find;
-
-		name = g_desktop_app_info_get_string (dt_info, G_KEY_FILE_DESKTOP_KEY_NAME);
-		if (name && ((g_utf8_collate (name, find_str) == 0) || (panel_g_utf8_strstrcase (name, find_str) != NULL))) {
-			goto find;
-		}
-
-		locale_name = g_desktop_app_info_get_locale_string (dt_info, G_KEY_FILE_DESKTOP_KEY_NAME);
-		if (locale_name && ((g_utf8_collate (locale_name, find_str) == 0) || (panel_g_utf8_strstrcase (locale_name, find_str) != NULL))) {
-			goto find;
-		}
-
-		exec = g_desktop_app_info_get_string (dt_info, G_KEY_FILE_DESKTOP_KEY_EXEC);
-		if (exec && ((g_utf8_collate (exec, find_str) == 0) || (panel_g_utf8_strstrcase (exec, find_str) != NULL))) {
-			goto find;
-		}
-		continue;
-
-find:
-		ret = g_strdup (g_desktop_app_info_get_filename (dt_info));
-
-		g_free (name);
-		g_free (locale_name);
-		g_free (exec);
-		break;
-	}
-
-	g_list_free_full (all_apps, g_object_unref);
-
-	return ret;
 }
 
 static void
@@ -386,6 +382,7 @@ handle_desktop_configuration (void)
 static void
 grac_reload_done_cb (GPid pid, gint status, gpointer data)
 {
+	g_print ("Reload Grac Service done cb!!!\n");
 	g_spawn_close_pid (pid);
 }
 
@@ -415,51 +412,48 @@ gooroom_agent_start_done_cb (GPid pid, gint status, gpointer data)
 }
 
 static void
-request_dpms_off_time_done_cb (GObject      *source_object,
-                               GAsyncResult *res,
-                               gpointer      user_data)
-{
-	GVariant *variant;
-	gchar *data = NULL;
-
-	variant = g_dbus_proxy_call_finish (G_DBUS_PROXY (source_object), res, NULL);
-	if (variant) {
-		GVariant *v;
-		g_variant_get (variant, "(v)", &v);
-		if (v) {
-			data = g_variant_dup_string (v, NULL);
-			g_variant_unref (v);
-		}
-		g_variant_unref (variant);
-	}
-
-	if (data) {
-		gchar *value = get_dpms_off_time_from_json (data);
-		dpms_off_time_update (atoi (value));
-		g_free (value);
-		g_free (data);
-	}
-}
-
-static void
 set_dpms_off_time (void)
 {
 	if (!g_agent_proxy)
 		g_agent_proxy = proxy_get ("agent");
 
 	if (g_agent_proxy) {
-		const gchar *json = "{\"module\":{\"module_name\":\"config\",\"task\":{\"task_name\":\"dpms_off_time\",\"in\":{\"login_id\":\"%s\"}}}}";
+		const gchar *json;
+		gchar *arg = NULL, *data = NULL;
+		GVariant *variant = NULL;
 
-		gchar *arg = g_strdup_printf (json, g_get_user_name ());
+		json = "{\"module\":{\"module_name\":\"config\",\"task\":{\"task_name\":\"dpms_off_time\",\"in\":{\"login_id\":\"%s\"}}}}";
 
-		g_dbus_proxy_call (g_agent_proxy,
-                           "do_task",
-                           g_variant_new ("(s)", arg),
-                           G_DBUS_CALL_FLAGS_NONE,
-                           -1,
-                           NULL,
-                           request_dpms_off_time_done_cb,
-                           NULL);
+		arg = g_strdup_printf (json, g_get_user_name ());
+
+		variant = g_dbus_proxy_call_sync (g_agent_proxy,
+                                          "do_task",
+                                          g_variant_new ("(s)", arg),
+                                          G_DBUS_CALL_FLAGS_NONE, -1,
+                                          NULL, NULL);
+
+		if (variant) {
+			GVariant *v = NULL;
+			g_variant_get (variant, "(v)", &v);
+			if (v) {
+				data = g_variant_dup_string (v, NULL);
+				g_variant_unref (v);
+			}
+			g_variant_unref (variant);
+		}
+
+		if (data) {
+			gchar *value = get_dpms_off_time_from_json (data);
+			if (value) {
+				dpms_off_time_update (atoi (value));
+			} else {
+				g_warning ("Failed to get dpms_off_time from Gooroom Agent Service");
+				dpms_off_time_update (0);
+			}
+			g_free (value);
+			g_free (data);
+		}
+
 		g_free (arg);
 	}
 }
@@ -492,7 +486,7 @@ do_update_operation (gint32 value)
 }
 
 static void
-save_list (gchar *list, const gchar *id)
+save_settings (gchar *list, const gchar *id)
 {
 	g_return_if_fail (list != NULL);
 
@@ -677,7 +671,7 @@ agent_signal_cb (GDBusProxy *proxy,
 			g_variant_unref (v);
 		}
 		if (blacklist) {
-			save_list (blacklist, "black_list");
+			save_settings (blacklist, "black_list");
 			g_free (blacklist);
 		}
 	} else if (g_str_equal (signal_name, "controlcenter_items")) {
@@ -689,9 +683,18 @@ agent_signal_cb (GDBusProxy *proxy,
 			g_variant_unref (v);
 		}
 		if (items) {
-			save_list (items, "controlcenter_items");
+			save_settings (items, "controlcenter_items");
 			g_free (items);
 		}
+	}
+}
+
+static void
+unbind_grac_signal (void)
+{
+	if (g_grac_proxy && g_grac_signal_id != 0) {
+		g_signal_handler_disconnect (g_grac_proxy, g_grac_signal_id);
+		g_grac_signal_id = 0;
 	}
 }
 
@@ -701,8 +704,19 @@ bind_grac_signal (void)
 	if (!g_grac_proxy)
 		g_grac_proxy = proxy_get ("grac");
 
-	if (g_grac_proxy)
-		g_signal_connect (g_grac_proxy, "g-signal", G_CALLBACK (grac_signal_cb), NULL);
+	if (g_grac_proxy && g_grac_signal_id == 0) {
+		g_grac_signal_id = g_signal_connect (g_grac_proxy, "g-signal",
+                                             G_CALLBACK (grac_signal_cb), NULL);
+	}
+}
+
+static void
+unbind_gooroom_agent_signal (void)
+{
+	if (g_agent_proxy && g_agent_signal_id != 0) {
+		g_signal_handler_disconnect (g_agent_proxy, g_agent_signal_id);
+		g_agent_signal_id = 0;
+	}
 }
 
 static void
@@ -711,8 +725,10 @@ bind_gooroom_agent_signal (void)
 	if (!g_agent_proxy)
 		g_agent_proxy = proxy_get ("agent");
 
-	if (g_agent_proxy)
-		g_signal_connect (g_agent_proxy, "g-signal", G_CALLBACK (agent_signal_cb), NULL);
+	if (g_agent_proxy && g_agent_signal_id == 0) {
+		g_agent_signal_id = g_signal_connect (g_agent_proxy, "g-signal",
+                                              G_CALLBACK (agent_signal_cb), NULL);
+	}
 }
 
 static gchar *
@@ -745,112 +761,136 @@ get_list_from_json (const gchar *data, const gchar *property)
 }
 
 static void
+set_controlcenter_whitelist (void)
+{
+	if (!g_agent_proxy)
+		g_agent_proxy = proxy_get ("agent");
+
+	if (g_agent_proxy) {
+		const gchar *json;
+		GVariant *variant = NULL;
+		gchar *arg = NULL, *data = NULL;
+
+		json = "{\"module\":{\"module_name\":\"config\",\"task\":{\"task_name\":\"get_controlcenter_items\",\"in\":{\"login_id\":\"%s\"}}}}";
+
+		arg = g_strdup_printf (json, g_get_user_name ());
+
+		variant = g_dbus_proxy_call_sync (g_agent_proxy,
+                                          "do_task",
+                                          g_variant_new ("(s)", arg),
+                                          G_DBUS_CALL_FLAGS_NONE, -1,
+                                          NULL, NULL);
+
+		if (variant) {
+			GVariant *v = NULL;
+			g_variant_get (variant, "(v)", &v);
+			if (v) {
+				data = g_variant_dup_string (v, NULL);
+				g_variant_unref (v);
+			}
+			g_variant_unref (variant);
+		}
+
+		if (data) {
+			gchar *list = get_list_from_json (data, "controlcenter_items");
+			if (list) {
+				save_settings (list, "controlcenter_items");
+				g_free (list);
+			}
+			g_free (data);
+		}
+
+		g_free (arg);
+	}
+}
+
+static void
+set_application_blacklist (void)
+{
+	if (!g_agent_proxy)
+		g_agent_proxy = proxy_get ("agent");
+
+	if (g_agent_proxy) {
+		const gchar *json;
+		GVariant *variant = NULL;
+		gchar *arg = NULL, *data = NULL;
+
+		json = "{\"module\":{\"module_name\":\"config\",\"task\":{\"task_name\":\"get_app_list\",\"in\":{\"login_id\":\"%s\"}}}}";
+
+		arg = g_strdup_printf (json, g_get_user_name ());
+
+		variant = g_dbus_proxy_call_sync (g_agent_proxy,
+                                          "do_task",
+                                          g_variant_new ("(s)", arg),
+                                          G_DBUS_CALL_FLAGS_NONE, -1,
+                                          NULL, NULL);
+
+		if (variant) {
+			GVariant *v = NULL;
+			g_variant_get (variant, "(v)", &v);
+			if (v) {
+				data = g_variant_dup_string (v, NULL);
+				g_variant_unref (v);
+			}
+			g_variant_unref (variant);
+		}
+
+		if (data) {
+			gchar *list = get_list_from_json (data, "black_list");
+			if (list) {
+				save_settings (list, "black_list");
+				g_free (list);
+			}
+			g_free (data);
+		}
+
+		g_free (arg);
+	}
+}
+
+static void
 restart_dockbarx_done_cb (GObject      *source_object,
                           GAsyncResult *res,
                           gpointer      user_data)
 {
-}
-
-static void
-request_done_cb (GObject      *source_object,
-                 GAsyncResult *res,
-                 gpointer      user_data)
-{
-	GVariant *variant;
-	gchar *data = NULL;
-
-	const gchar *arg = (const gchar *)user_data;
-	variant = g_dbus_proxy_call_finish (G_DBUS_PROXY (source_object), res, NULL);
-	if (variant) {
-		GVariant *v;
-		g_variant_get (variant, "(v)", &v);
-		if (v) {
-			data = g_variant_dup_string (v, NULL);
-			g_variant_unref (v);
-		}
-		g_variant_unref (variant);
-	}
-
-	if (data) {
-		gchar *list = get_list_from_json (data, arg);
-		if (list) {
-			save_list (list, arg);
-			g_free (list);
-		}
-		g_free (data);
+	if (g_blacklist_settings) {
+		g_signal_handlers_unblock_by_func (g_blacklist_settings,
+                                           gooroom_blacklist_settings_changed, NULL);
 	}
 }
 
 static void
-update_controlcenter_whitelist (void)
+gooroom_dockbarx_applet_vanished_cb (GDBusConnection *connection,
+                                     const gchar     *name,
+                                     gpointer         data)
 {
-	if (!g_agent_proxy)
-		g_agent_proxy = proxy_get ("agent");
-
-	if (g_agent_proxy) {
-		const gchar *json = "{\"module\":{\"module_name\":\"config\",\"task\":{\"task_name\":\"get_controlcenter_items\",\"in\":{\"login_id\":\"%s\"}}}}";
-
-		gchar *arg = g_strdup_printf (json, g_get_user_name ());
-
-		g_dbus_proxy_call (g_agent_proxy,
-				"do_task",
-				g_variant_new ("(s)", arg),
-				G_DBUS_CALL_FLAGS_NONE,
-				-1,
-				NULL,
-				request_done_cb,
-				"controlcenter_items");
-
-		g_free (arg);
-	}
 }
 
 static void
-update_app_blacklist (void)
-{
-	if (!g_agent_proxy)
-		g_agent_proxy = proxy_get ("agent");
-
-	if (g_agent_proxy) {
-		const gchar *json = "{\"module\":{\"module_name\":\"config\",\"task\":{\"task_name\":\"get_app_list\",\"in\":{\"login_id\":\"%s\"}}}}";
-
-		gchar *arg = g_strdup_printf (json, g_get_user_name ());
-
-		g_dbus_proxy_call (g_agent_proxy,
-				"do_task",
-				g_variant_new ("(s)", arg),
-				G_DBUS_CALL_FLAGS_NONE,
-				-1,
-				NULL,
-				request_done_cb,
-				"black_list");
-
-		g_free (arg);
-	}
-}
-
-static gboolean
-update_blacklist_and_restart_dockbarx (gpointer user_data)
+gooroom_dockbarx_applet_appeared_cb (GDBusConnection *connection,
+                                     const gchar     *name,
+                                     const gchar     *name_owner,
+                                     gpointer         data)
 {
 	GDBusProxy *proxy = NULL;
 
-	gchar **blacklist = (gchar **)user_data;
-
-	update_blacklist (blacklist);
-	g_strfreev (blacklist);
+	if (g_gda_watch_id) {
+		g_bus_unwatch_name (g_gda_watch_id);
+		g_gda_watch_id = 0;
+	}
 
 	proxy = g_dbus_proxy_new_for_bus_sync (G_BUS_TYPE_SESSION,
-				G_DBUS_CALL_FLAGS_NONE,
-				NULL,
-				"kr.gooroom.dockbarx.applet",
-				"/kr/gooroom/dockbarx/applet",
-				"kr.gooroom.dockbarx.applet",
-				NULL,
-				NULL);
+                                           G_DBUS_CALL_FLAGS_NONE,
+                                           NULL,
+                                           "kr.gooroom.dockbarx.applet",
+                                           "/kr/gooroom/dockbarx/applet",
+                                           "kr.gooroom.dockbarx.applet",
+                                           NULL,
+                                           NULL);
 
 	if (proxy == NULL) {
 		g_warning ("Failed to get dockbarx applet proxy");
-		return FALSE;
+		return;
 	}
 
 	g_dbus_proxy_call (proxy,
@@ -862,10 +902,60 @@ update_blacklist_and_restart_dockbarx (gpointer user_data)
                        NULL);
 
 	g_clear_object (&proxy);
+}
 
-	if (timeout_id > 0) {
-		g_source_remove (timeout_id);
-		timeout_id = 0;
+static gboolean
+request_to_restart_dockbarx_idle (gpointer data)
+{
+	if (g_gda_watch_id != 0) {
+		g_bus_unwatch_name (g_gda_watch_id);
+		g_gda_watch_id = 0;
+	}
+
+	g_gda_watch_id = g_bus_watch_name (G_BUS_TYPE_SESSION,
+                                       "kr.gooroom.dockbarx.applet",
+                                       G_BUS_NAME_WATCHER_FLAGS_NONE,
+                                       gooroom_dockbarx_applet_appeared_cb,
+                                       gooroom_dockbarx_applet_vanished_cb,
+                                       NULL, NULL);
+
+	return FALSE;
+}
+
+static void
+update_blacklist (gchar **blacklist)
+{
+	gchar *pkexec, *cmd;
+
+	pkexec = g_find_program_in_path ("pkexec");
+
+	if (blacklist) {
+		gchar *str_blacklist = g_strjoinv (" ", blacklist);
+		cmd = g_strdup_printf ("%s %s %s", pkexec, GOOROOM_UPDATE_BLACKLIST_HELPER, str_blacklist);
+		g_free (str_blacklist);
+	} else {
+		cmd = g_strdup_printf ("%s %s", pkexec, GOOROOM_UPDATE_BLACKLIST_HELPER);
+	}
+
+	g_spawn_command_line_sync (cmd, NULL, NULL, NULL, NULL);
+
+	g_free (pkexec);
+	g_free (cmd);
+}
+
+static gboolean
+update_blacklist_idle (gpointer user_data)
+{
+	gchar **blacklist = (gchar **)user_data;
+
+	update_blacklist (blacklist);
+	g_strfreev (blacklist);
+
+	request_to_restart_dockbarx_idle (NULL);
+
+	if (g_timeout_id > 0) {
+		g_source_remove (g_timeout_id);
+		g_timeout_id = 0;
 	}
 
 	return FALSE;
@@ -877,25 +967,10 @@ gooroom_blacklist_settings_changed (GSettings *settings,
                                     gpointer data)
 {
 	if (g_str_equal (key, "blacklist")) {
-		if (timeout_id == 0) {
+		if (g_timeout_id == 0) {
 			gchar **blacklist = g_settings_get_strv (settings, key);
-			timeout_id = g_idle_add ((GSourceFunc) update_blacklist_and_restart_dockbarx, blacklist);
+			g_timeout_id = g_idle_add ((GSourceFunc) update_blacklist_idle, blacklist);
 		}
-	}
-}
-
-static void
-send_request_to_gooroom_agent_done_cb (GObject      *source_object,
-                                       GAsyncResult *res,
-                                       gpointer      user_data)
-{
-	gchar *arg = (gchar *)user_data;
-
-	if (g_str_equal (arg, "set_authority_config") ||
-        g_str_equal (arg, "set_authority_config_local"))
-	{
-		/* reload grac service */
-		reload_grac_service ();
 	}
 }
 
@@ -906,18 +981,21 @@ send_request_to_gooroom_agent (const gchar *request)
 		g_agent_proxy = proxy_get ("agent");
 
 	if (g_agent_proxy) {
-		const gchar *json = "{\"module\":{\"module_name\":\"config\",\"task\":{\"task_name\":\"%s\",\"in\":{\"login_id\":\"%s\"}}}}";
+		const gchar *json;
+		gchar *arg = NULL;
+		GVariant *variant = NULL;
 
-		gchar *arg = g_strdup_printf (json, request, g_get_user_name ());
+		json = "{\"module\":{\"module_name\":\"config\",\"task\":{\"task_name\":\"%s\",\"in\":{\"login_id\":\"%s\"}}}}";
 
-		g_dbus_proxy_call (g_agent_proxy,
-				"do_task",
-				g_variant_new ("(s)", arg),
-				G_DBUS_CALL_FLAGS_NONE,
-				-1,
-				NULL,
-                send_request_to_gooroom_agent_done_cb,
-				(gchar *)request);
+		arg = g_strdup_printf (json, request, g_get_user_name ());
+
+		variant = g_dbus_proxy_call_sync (g_agent_proxy,
+                                          "do_task",
+                                          g_variant_new ("(s)", arg),
+                                          G_DBUS_CALL_FLAGS_NONE, -1,
+                                          NULL, NULL);
+		if (variant)
+			g_variant_unref (variant);
 
 		g_free (arg);
 	}
@@ -953,15 +1031,84 @@ terminate_session (void)
 }
 
 static void
+grac_name_vanished_cb (GDBusConnection *connection,
+                       const gchar     *name,
+                       gpointer         data)
+{
+	g_warning ("GRAC Service is not running");
+
+	unbind_grac_signal ();
+}
+
+static void
+grac_name_appeared_cb (GDBusConnection *connection,
+                       const gchar     *name,
+                       const gchar     *name_owner,
+                       gpointer         data)
+{
+	bind_grac_signal ();
+}
+
+static void
+agent_job_thread_done_cb (GObject      *source_object,
+                          GAsyncResult *result,
+                          gpointer      user_data)
+{
+	bind_gooroom_agent_signal ();
+
+	if (!g_agent_name_appeared || registered_gpms ()) {
+		if (is_systemd_service_active ("grac-device-daemon.service"))
+			reload_grac_service ();
+
+		g_idle_add ((GSourceFunc) request_to_restart_dockbarx_idle, NULL);
+	}
+
+	g_agent_name_appeared = TRUE;
+}
+
+static void
+agent_job_thread (GTask        *task,
+                  gpointer      source_object,
+                  gpointer      task_data,
+                  GCancellable *cancellable)
+{
+	if (registered_gpms ()) {
+		const gchar *req_arg;
+
+		if (g_blacklist_settings) {
+			g_signal_handlers_block_by_func (g_blacklist_settings,
+                                             gooroom_blacklist_settings_changed, NULL);
+		}
+		req_arg = is_gpms_user (g_get_user_name ()) ? "set_authority_config" : "set_authority_config_local";
+
+		/* request to save GRAC's rule for Gooroom */
+		send_request_to_gooroom_agent (req_arg);
+		/* request to check blocking packages change */
+		send_request_to_gooroom_agent ("get_update_operation_with_loginid");
+
+		set_dpms_off_time ();
+		set_controlcenter_whitelist ();
+		set_application_blacklist ();
+	}
+
+	/* The task has finished */
+	g_task_return_boolean (task, TRUE);
+}
+
+static void
 gooroom_agent_name_vanished_cb (GDBusConnection *connection,
                                 const gchar     *name,
                                 gpointer         data)
 {
 	g_warning ("Gooroom Agent Service is not running");
 
-	if (watch_id) {
-		g_bus_unwatch_name (watch_id);
-		watch_id = 0;
+	unbind_gooroom_agent_signal ();
+
+	if (!g_agent_name_appeared) {
+		if (is_systemd_service_active ("grac-device-daemon.service"))
+			reload_grac_service ();
+
+		g_idle_add ((GSourceFunc) request_to_restart_dockbarx_idle, NULL);
 	}
 }
 
@@ -971,27 +1118,50 @@ gooroom_agent_name_appeared_cb (GDBusConnection *connection,
                                 const gchar     *name_owner,
                                 gpointer         data)
 {
-	const gchar *req_arg;
+	GTask *task;
 
-	if (watch_id) {
-		g_bus_unwatch_name (watch_id);
-		watch_id = 0;
-	}
+	task = g_task_new (NULL, NULL, agent_job_thread_done_cb, NULL);
+	g_task_run_in_thread (task, agent_job_thread);
+	g_object_unref (task);
+}
 
-	req_arg = is_gpms_user (g_get_user_name ()) ? "set_authority_config" : "set_authority_config_local";
+static void
+start_init_thread_done_cb (GObject      *source_object,
+                           GAsyncResult *result,
+                           gpointer      user_data)
+{
+	g_bus_watch_name (G_BUS_TYPE_SYSTEM,
+                      "kr.gooroom.agent",
+                      G_BUS_NAME_WATCHER_FLAGS_NONE,
+                      gooroom_agent_name_appeared_cb,
+                      gooroom_agent_name_vanished_cb,
+                      NULL, NULL);
 
-	/* request to save GRAC's rule for Gooroom */
-	send_request_to_gooroom_agent (req_arg);
+	g_bus_watch_name (G_BUS_TYPE_SYSTEM,
+                      "kr.gooroom.GRACDEVD",
+                      G_BUS_NAME_WATCHER_FLAGS_NONE,
+                      grac_name_appeared_cb,
+                      grac_name_vanished_cb,
+                      NULL, NULL);
+}
 
-	/* request to check blocking packages change */
-	send_request_to_gooroom_agent ("get_update_operation_with_loginid");
+static void
+start_init_thread (GTask        *task,
+                  gpointer      source_object,
+                  gpointer      task_data,
+                  GCancellable *cancellable)
+{
+	/* initialize blacklist */
+	update_blacklist (NULL);
 
-	set_dpms_off_time ();
+	/* remove permission from binary */
+	gchar **blacklist = g_settings_get_strv (g_blacklist_settings, "blacklist");
+	if (blacklist)
+		update_blacklist (blacklist);
+	g_strfreev (blacklist);
 
-	update_controlcenter_whitelist ();
-	update_app_blacklist ();
-
-	bind_gooroom_agent_signal ();
+	/* The task has finished */
+	g_task_return_boolean (task, TRUE);
 }
 
 static void
@@ -999,6 +1169,7 @@ name_acquired_handler (GDBusConnection *connection,
                        const gchar     *name,
                        gpointer         user_data)
 {
+	GTask *task;
 	gchar *grm_user = NULL;
 	GSettingsSchema *schema = NULL;
 
@@ -1013,9 +1184,6 @@ name_acquired_handler (GDBusConnection *connection,
 		/* configure icon-theme and background */
 		handle_desktop_configuration ();
 	}
-
-	/* initialize blacklist */
-	update_blacklist (NULL);
 
 	schema = g_settings_schema_source_lookup (g_settings_schema_source_get_default (),
                                               "apps.gooroom-applauncher-applet", TRUE);
@@ -1033,21 +1201,9 @@ name_acquired_handler (GDBusConnection *connection,
 		g_settings_schema_unref (schema);
 	}
 
-	if (registered_gpms ()) {
-		watch_id = g_bus_watch_name (G_BUS_TYPE_SYSTEM,
-                                     "kr.gooroom.agent",
-                                     G_BUS_NAME_WATCHER_FLAGS_NONE,
-                                     gooroom_agent_name_appeared_cb,
-                                     gooroom_agent_name_vanished_cb,
-                                     NULL, NULL);
-	} else {
-		if (timeout_id == 0) {
-			gchar **blacklist = g_settings_get_strv (g_blacklist_settings, "blacklist");
-			timeout_id = g_idle_add ((GSourceFunc) update_blacklist_and_restart_dockbarx, blacklist);
-		}
-	}
-
-	bind_grac_signal ();
+	task = g_task_new (NULL, NULL, start_init_thread_done_cb, NULL);
+	g_task_run_in_thread (task, start_init_thread);
+	g_object_unref (task);
 
 
 done:
@@ -1074,37 +1230,43 @@ main (int argc, char **argv)
 
 	gtk_init (&argc, &argv);
 
-	owner_id = g_bus_own_name (G_BUS_TYPE_SESSION,
-                               "kr.gooroom.SessionManager",
-                               G_BUS_NAME_OWNER_FLAGS_NONE,
-                               NULL,
-                               (GBusNameAcquiredCallback) name_acquired_handler,
-                               (GBusNameLostCallback) name_lost_handler,
-                               NULL,
-                               NULL);
+	g_owner_id = g_bus_own_name (G_BUS_TYPE_SESSION,
+                                 "kr.gooroom.SessionManager",
+                                 G_BUS_NAME_OWNER_FLAGS_NONE,
+                                 NULL,
+                                 (GBusNameAcquiredCallback) name_acquired_handler,
+                                 (GBusNameLostCallback) name_lost_handler,
+                                 NULL,
+                                 NULL);
 
 	gtk_main ();
 
-	if (timeout_id > 0) {
-		g_source_remove (timeout_id);
-		timeout_id = 0;
+	if (g_timeout_id > 0) {
+		g_source_remove (g_timeout_id);
+		g_timeout_id = 0;
 	}
 
-	if (watch_id) {
-		g_bus_unwatch_name (watch_id);
-		watch_id = 0;
+	if (g_gda_watch_id) {
+		g_bus_unwatch_name (g_gda_watch_id);
+		g_gda_watch_id = 0;
 	}
 
-	if (owner_id) {
-		g_bus_unown_name (owner_id);
-		owner_id = 0;
+	if (g_owner_id) {
+		g_bus_unown_name (g_owner_id);
+		g_owner_id = 0;
 	}
 
-	if (g_agent_proxy)
+	if (g_agent_proxy) {
+		if (g_agent_signal_id)
+			g_signal_handler_disconnect (g_agent_proxy, g_agent_signal_id);
 		g_object_unref (g_agent_proxy);
+	}
 
-	if (g_grac_proxy)
+	if (g_grac_proxy) {
+		if (g_grac_signal_id)
+			g_signal_handler_disconnect (g_grac_proxy, g_grac_signal_id);
 		g_object_unref (g_grac_proxy);
+	}
 
 	if(g_blacklist_settings)
 		g_object_unref (g_blacklist_settings);

@@ -13,10 +13,10 @@ gooroom_session_manager_CFLAGS = \
 	-DGOOROOM_UPDATE_BLACKLIST_HELPER=\"$(pkglibexecdir)/gooroom-update-blacklist-helper\"  \
 	$(GTK_CFLAGS) 		\
 	$(GLIB_CFLAGS) 	\
-    $(JSON_C_CFLAGS)    \
-    $(DBUS_GLIB_CFLAGS) \
-    $(LIBNOTIFY_CFLAGS) \
-    $(POLKIT_CFLAGS)
+	$(JSON_C_CFLAGS)	\
+	$(DBUS_GLIB_CFLAGS) \
+	$(LIBNOTIFY_CFLAGS) \
+	$(POLKIT_CFLAGS)
 
 gooroom_session_manager_LDADD = \
 	$(GTK_LIBS) 	\
@@ -39,7 +39,7 @@ grac_reload_helper_LDFLAGS = \
 	$(GIO_LIBS)
 
 gooroom_update_blacklist_helper_SOURCES = \
-	panel-glib.c	\
+	panel-glib.c \
 	gooroom-update-blacklist-helper.c
 
 gooroom_update_blacklist_helper_CFLAGS = \
