@@ -1,3 +1,12 @@
+gooroom-session-manager (0.2.1+grm2u1) unstable; urgency=medium
+
+  [ cjheo ]
+  * [5714601f] 성능향상을 위한 구조개선
+
+  [ Gooroom Autobuilder ]
+
+ -- Gooroom Autobuilder <jenkins@gooroom.kr>  Tue, 11 Feb 2020 10:39:46 +0900
+
 gooroom-session-manager (0.1.1+grm2u1) unstable; urgency=medium
 
   * Initial Release.
