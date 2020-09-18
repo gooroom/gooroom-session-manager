@@ -16,7 +16,9 @@ Build-Depends: automake (>= 1.13),
                libjson-c-dev,
                libdbus-glib-1-dev,
                libnotify-dev,
-               libpolkit-gobject-1-dev
+               libpolkit-gobject-1-dev,
+               libgnome-desktop-3-dev,
+               libx11-dev
 Standards-Version: 3.9.8
 
 Package: gooroom-session-manager

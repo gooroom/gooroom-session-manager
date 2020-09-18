@@ -30,6 +30,7 @@
 #include <dbus/dbus.h>
 #include <json-c/json.h>
 #include <polkit/polkit.h>
+#include <libnotify/notify.h>
 
 #include <glib.h>
 #include <gtk/gtk.h>
@@ -37,28 +38,127 @@
 #include <glib/gstdio.h>
 #include <gio/gdesktopappinfo.h>
 
-#include <libnotify/notify.h>
+#include <gdk/gdkx.h>
+#include <X11/Xlib.h>
+#include <X11/Xatom.h>
+#include <cairo-xlib.h>
 
+#define GNOME_DESKTOP_USE_UNSTABLE_API
+#include <libgnome-desktop/gnome-idle-monitor.h>
+
+
+#include "gs-grab.h"
+#include "gsm-message-dialog.h"
 #include "panel-glib.h"
 
-#define	GRM_USER		        ".grm-user"
-#define	BACKGROUND_PATH         "/usr/share/backgrounds/gooroom/"
-#define	DEFAULT_BACKGROUND      "/usr/share/images/desktop-base/desktop-background.xml"
+#define GRM_USER                ".grm-user"
+#define LIGHTDM_MODE_PATH       "/var/tmp/lightdm.mode"
+#define BACKGROUND_PATH         "/usr/share/backgrounds/gooroom/"
+#define DEFAULT_BACKGROUND      "/usr/share/images/desktop-base/desktop-background.xml"
 #define GCSR_CONF               "/etc/gooroom/gooroom-client-server-register/gcsr.conf"
+
+#define LOGOUT_POSTPONE_TIMEOUT            30 * 60 //30 minutes
+#define IDLE_DELAY_TO_IDLE_DIM_MULTIPLIER  4.0/5.0
+
+#ifdef GRAC_DEBUG
+#define GRAC_LOG(fmt, args...) g_print("[%s] " fmt, __func__, ##args)
+#else
+#define GRAC_LOG(fmt, args...)
+#endif //GRAC_DEBUG
 
 
 static GSettings  *g_blacklist_settings = NULL;
 static GSettings  *g_whitelist_settings = NULL;
+static GSettings  *g_session_settings = NULL;
+
 static GDBusProxy *g_grac_proxy = NULL;
 static GDBusProxy *g_agent_proxy = NULL;
-static guint g_gda_watch_id = 0;
-static guint g_owner_id = 0, g_timeout_id = 0;
-static guint g_agent_signal_id = 0, g_grac_signal_id = 0;
+static GDBusProxy *g_vpn_proxy = NULL;
+
+static guint g_gda_watch_id = 0, g_owner_id = 0;
+static guint g_timeout_id = 0, g_logout_timeout_id = 0;
+static guint g_agent_signal_id = 0, g_grac_signal_id = 0, g_vpn_signal_id = 0;
+static guint g_idle_dim_id = 0;
+
 static gboolean g_agent_name_appeared = FALSE;
 
+static GSGrab *g_gs_grab = NULL;
+static GnomeIdleMonitor *g_idle_monitor = NULL;
+
+
+enum {
+	VPN_LOGIN_FAILURE               = 1001,
+	VPN_LOGIN_SUCCESS               = 1002,
+	VPN_AUTH_FAILURE                = 1003,
+	VPN_ACCOUNT_LOCKED              = 1004,
+	VPN_ID_EXPIRED                  = 1005,
+	VPN_PW_EXPIRED                  = 1006,
+	VPN_LOGIN_EXPIRED               = 1007,
+	VPN_LOGIN_TIME_BLOCKED          = 1008,
+	VPN_LOGIN_WEEK_BLOCKED          = 1009,
+	VPN_SERVER_CONNECTION_ERROR     = 1010,
+	VPN_SERVER_RESPONSE_ERROR       = 1011,
+	VPN_SERVER_DISCONNECTED         = 1012,
+	VPN_UNKNOWN_ERROR               = 1013,
+	VPN_SERVICE_DAEMON_ERROR        = 1014,
+	VPN_SERVICE_LOGIN_REQUEST_ERROR = 1015
+};
+
+enum {
+	DIALOG_TYPE_TERMINATE_SESSION = 1,
+	DIALOG_TYPE_TERMINATE_VPN     = 2
+};
+
+typedef struct _MessageDialogData {
+	gchar    *title;
+	gchar    *message;
+	gchar    *icon_name;
+	gint      dialog_type;
+} MessageDialogData;
+
+
+
+
+static gboolean message_dialog_show_idle (gpointer user_data);
 static void gooroom_blacklist_settings_changed (GSettings *settings, const gchar *key, gpointer data);
 
 
+static void
+message_dialog_data_free (MessageDialogData *data)
+{
+	if (data) {
+		g_free (data->title);
+		g_free (data->message);
+		g_free (data->icon_name);
+		g_free (data);
+	}
+}
+
+static MessageDialogData *
+message_dialog_data_new (gint dialog_type, gpointer user_data)
+{
+	MessageDialogData *data = NULL;
+
+	if (dialog_type == DIALOG_TYPE_TERMINATE_VPN) {
+		data = g_new0 (MessageDialogData, 1);
+		data->title = g_strdup (_("VPN Service Error Notice"));
+		data->message = g_strdup (_("There is a problem with VPN connection. "
+						"In order to use the remote terminal safely, the terminal must be shut down. "
+						"Would you like to extend your device usage?"));
+		data->icon_name = g_strdup ("network-vpn-error-symbolic");
+		data->dialog_type = DIALOG_TYPE_TERMINATE_VPN;
+	} else if (dialog_type == DIALOG_TYPE_TERMINATE_SESSION) {
+		data = g_new0 (MessageDialogData, 1);
+		data->title = g_strdup (_("Automatic Logout Notice"));
+		data->message = g_strdup_printf (_("Since there is no use %s after logging in, "
+                                         "you are automatically logged out "
+                                         "for a safe working environment."), (gchar *)user_data);
+		data->icon_name = g_strdup ("system-log-out-symbolic");
+		data->dialog_type = DIALOG_TYPE_TERMINATE_SESSION;
+	}
+
+	return data;
+}
 
 static void
 show_notification (const gchar *summary, const gchar *message, const gchar *icon)
@@ -105,20 +205,19 @@ get_object_path (gchar **object_path, const gchar *service_name)
 	GError     *error = NULL;
 
 	proxy = g_dbus_proxy_new_for_bus_sync (G_BUS_TYPE_SYSTEM,
-			G_DBUS_CALL_FLAGS_NONE, NULL,
-			"org.freedesktop.systemd1",
-			"/org/freedesktop/systemd1",
-			"org.freedesktop.systemd1.Manager",
-			NULL, &error);
-
+                                           G_DBUS_CALL_FLAGS_NONE, NULL,
+                                           "org.freedesktop.systemd1",
+                                           "/org/freedesktop/systemd1",
+                                           "org.freedesktop.systemd1.Manager",
+                                           NULL, &error);
 	if (!proxy) {
 		g_error_free (error);
 		return FALSE;
 	}
 
 	variant = g_dbus_proxy_call_sync (proxy, "GetUnit",
-			g_variant_new ("(s)", service_name),
-			G_DBUS_CALL_FLAGS_NONE, -1, NULL, &error);
+                                      g_variant_new ("(s)", service_name),
+                                      G_DBUS_CALL_FLAGS_NONE, -1, NULL, &error);
 
 	if (!variant) {
 		g_error_free (error);
@@ -131,7 +230,6 @@ get_object_path (gchar **object_path, const gchar *service_name)
 
 	return TRUE;
 }
-
 
 static gboolean
 is_systemd_service_active (const gchar *service_name)
@@ -149,18 +247,17 @@ is_systemd_service_active (const gchar *service_name)
 	}
 
 	proxy = g_dbus_proxy_new_for_bus_sync (G_BUS_TYPE_SYSTEM,
-			G_DBUS_CALL_FLAGS_NONE, NULL,
-			"org.freedesktop.systemd1",
-			obj_path,
-			"org.freedesktop.DBus.Properties",
-			NULL, &error);
-
+                                           G_DBUS_CALL_FLAGS_NONE, NULL,
+                                           "org.freedesktop.systemd1",
+                                           obj_path,
+                                           "org.freedesktop.DBus.Properties",
+                                           NULL, &error);
 	if (!proxy)
 		goto done;
 
 	variant = g_dbus_proxy_call_sync (proxy, "GetAll",
-			g_variant_new ("(s)", "org.freedesktop.systemd1.Unit"),
-			G_DBUS_CALL_FLAGS_NONE, -1, NULL, &error);
+                                      g_variant_new ("(s)", "org.freedesktop.systemd1.Unit"),
+                                      G_DBUS_CALL_FLAGS_NONE, -1, NULL, &error);
 
 	if (variant) {
 		gchar *output = NULL;
@@ -533,12 +630,6 @@ grac_notifications_close (GList *list)
 		if (n) notify_notification_close (n, NULL);
 	}
 }
-
-#ifdef GRAC_DEBUG
-#define GRAC_LOG(fmt, args...) g_print("[%s] " fmt, __func__, ##args)
-#else
-#define GRAC_LOG(fmt, args...) 
-#endif //GRAC_DEBUG
 
 static void
 do_resource_access_control (gchar *data)
@@ -1030,6 +1121,479 @@ terminate_session (void)
 	gtk_widget_show (message);
 }
 
+///* Copied from xfce4-session/xfce4-session/xfsm-fadeout.c:
+// * xfsm_x11_fadeout_new_window () */
+//static Window
+//x11_fadeout_new_window (GdkDisplay *display, GdkScreen *screen)
+//{
+//	XSetWindowAttributes  attr;
+//	Display              *xdisplay;
+//	Window                xwindow;
+//	GdkWindow            *root;
+//	GdkCursor            *cursor;
+//	cairo_t              *cr;
+//	gint                  width;
+//	gint                  height;
+//	GdkPixbuf            *root_pixbuf;
+//	cairo_surface_t      *surface;
+//	gulong                mask = 0;
+//	gulong                opacity;
+//	gboolean              composited;
+//
+//	xdisplay = gdk_x11_display_get_xdisplay (display);
+//	root = gdk_screen_get_root_window (screen);
+//
+//	width = gdk_window_get_width (root);
+//	height = gdk_window_get_height (root);
+//
+//	composited = gdk_screen_is_composited (screen)
+//		&& gdk_screen_get_rgba_visual (screen) != NULL;
+//
+//	cursor = gdk_cursor_new_for_display (display, GDK_WATCH);
+//
+//	if (!composited) {
+//		/* create a copy of root window before showing the fadeout */
+//		root_pixbuf = gdk_pixbuf_get_from_window (root, 0, 0, width, height);
+//	}
+//
+//	attr.cursor = gdk_x11_cursor_get_xcursor (cursor);
+//	mask |= CWCursor;
+//
+//	attr.override_redirect = TRUE;
+//	mask |= CWOverrideRedirect;
+//
+//	attr.background_pixel = BlackPixel (xdisplay, gdk_x11_screen_get_screen_number (screen));
+//	mask |= CWBackPixel;
+//
+//	xwindow = XCreateWindow (xdisplay, gdk_x11_window_get_xid (root),
+//			0, 0, width, height, 0, CopyFromParent,
+//			InputOutput, CopyFromParent, mask, &attr);
+//
+//	g_object_unref (cursor);
+//
+//    if (composited) {
+//        /* apply transparency before map */
+//        opacity = 0.2 * 0xffffffff;
+//        XChangeProperty (xdisplay, xwindow,
+//                gdk_x11_get_xatom_by_name_for_display (display, "_NET_WM_WINDOW_OPACITY"),
+//                XA_CARDINAL, 32, PropModeReplace, (guchar *)&opacity, 1);
+//    }
+//
+//    XMapWindow (xdisplay, xwindow);
+//
+//	if (!composited) {
+//		/* create background for window */
+//		surface = cairo_xlib_surface_create (xdisplay, xwindow,
+//				gdk_x11_visual_get_xvisual (gdk_screen_get_system_visual (screen)),
+//				0, 0);
+//		cairo_xlib_surface_set_size (surface, width, height);
+//		cr = cairo_create (surface);
+//
+//		/* draw the copy of the root window */
+//		gdk_cairo_set_source_pixbuf (cr, root_pixbuf, 0, 0);
+//		cairo_paint (cr);
+//		g_object_unref (root_pixbuf);
+//
+//		/* draw black transparent layer */
+//		cairo_set_source_rgba (cr, 0, 0, 0, 0.5);
+//		cairo_paint (cr);
+//		cairo_destroy (cr);
+//		cairo_surface_destroy (surface);
+//	}
+//
+//	return xwindow;
+//}
+//
+//static GList *
+//fadeout_window_show (GdkDisplay *display)
+//{
+//	GdkScreen *screen;
+//	Window     xwindow;
+//	GList     *xwindows = NULL;
+//
+//	screen = gdk_display_get_default_screen (display);
+//	xwindow = x11_fadeout_new_window (display, screen);
+//	xwindows = g_list_prepend (xwindows, GINT_TO_POINTER (xwindow));
+//
+//	return xwindows;
+//}
+//
+//static void
+//fadeout_window_hide (GList *xwindows, GdkDisplay *display)
+//{
+//	GList   *l = NULL;
+//	Display *xdisplay;
+//
+//	xdisplay = gdk_x11_display_get_xdisplay (display);
+//
+//	for (l = xwindows; l; l = l->next) {
+//		Window xwindow = GPOINTER_TO_INT (l->data);
+//		XDestroyWindow (xdisplay, xwindow);
+//	}
+//}
+//
+//static void
+//warning_dialog_grab_callback (GdkSeat   *seat,
+//                             GdkWindow *window,
+//                             gpointer   user_data)
+//{
+//    /* ensure window is mapped to avoid unsuccessful grabs */
+//	if (!gdk_window_is_visible (window))
+//		gdk_window_show (window);
+//}
+//
+///* Copied from xfce4-session/xfce4-session/xfsm-logout-dialog.c:
+// * xfsm_warning_dialog_run () */
+//static gint
+//warning_dialog_run (GtkWidget *dialog, gboolean grab_input)
+//{
+//	GdkWindow *window;
+//	gint       ret;
+//	GdkDevice *device;
+//	GdkSeat   *seat;
+//
+//	if (grab_input) {
+//		gtk_widget_show_now (dialog);
+//		window = gtk_widget_get_window (dialog);
+//
+//		device = gtk_get_current_event_device ();
+//		seat = (device != NULL) ? gdk_device_get_seat (device)
+//                                : gdk_display_get_default_seat (gtk_widget_get_display (dialog));
+//
+//		if (gdk_seat_grab (seat, window,
+//                           GDK_SEAT_CAPABILITY_KEYBOARD,
+//                           FALSE, NULL, NULL,
+//                           warning_dialog_grab_callback,
+//                           NULL) != GDK_GRAB_SUCCESS)
+//		{
+//			g_critical ("Failed to grab the keyboard for window");
+//		}
+//
+//		/* force input to the dialog */
+//		XSetInputFocus (gdk_x11_get_default_xdisplay (),
+//                        GDK_WINDOW_XID (window),
+//                        RevertToParent, CurrentTime);
+//	}
+//
+//	ret = gtk_dialog_run (GTK_DIALOG (dialog));
+//
+//	if (grab_input)
+//		gdk_seat_ungrab (seat);
+//
+//	return ret;
+//}
+
+
+///* Copied from xfce4-session/xfce4-session/xfsm-logout-dialog.c:
+// * xfsm_warning_dialog () */
+//static void
+//warning_dialog_show (void)
+//{
+//	gint              result;
+//	GtkWidget        *hidden;
+//	GtkWidget        *dialog;
+//	GdkScreen        *screen;
+//	GList            *xwindows;
+//	GdkDevice        *device;
+//	GdkSeat          *seat;
+//	gint              grab_count = 0;
+//
+//	screen = gdk_screen_get_default ();
+//	hidden = gtk_invisible_new_for_screen (screen);
+//	gtk_widget_show (hidden);
+//
+//	/* wait until we can grab the keyboard, we need this for
+//	 * the dialog when running it */
+//	for (;;) {
+//		device = gtk_get_current_event_device ();
+//		seat = (device != NULL) ? gdk_device_get_seat (device)
+//                                : gdk_display_get_default_seat (gtk_widget_get_display (hidden));
+//
+//		if (gdk_seat_grab (seat,
+//                           gtk_widget_get_window (hidden),
+//                           GDK_SEAT_CAPABILITY_KEYBOARD,
+//                           FALSE, NULL, NULL,
+//                           warning_dialog_grab_callback,
+//                           NULL) == GDK_GRAB_SUCCESS)
+//		{
+//			gdk_seat_ungrab (seat);
+//			break;
+//		}
+//
+//		if (grab_count++ >= 40) {
+//			g_critical ("Failed to grab the keyboard for window");
+//			break;
+//		}
+//
+//		g_usleep (G_USEC_PER_SEC / 20);
+//	}
+//
+//	/* display fadeout */
+////	xwindows = fadeout_window_show (gdk_screen_get_display (screen));
+//
+//    dialog = gtk_message_dialog_new (NULL,
+//                                     GTK_DIALOG_DESTROY_WITH_PARENT,
+//                                     GTK_MESSAGE_ERROR,
+//                                     GTK_BUTTONS_CLOSE,
+//                                     NULL);
+//
+//	gtk_window_set_title (GTK_WINDOW (dialog), "Warning");
+//	gtk_window_set_screen (GTK_WINDOW (dialog), screen);
+//    gtk_window_set_position (GTK_WINDOW (dialog), GTK_WIN_POS_CENTER_ALWAYS);
+//
+//	gchar *markup = g_markup_printf_escaped ("<span weight=\'bold\'>%s</span>", "Title");
+//	gtk_message_dialog_set_markup (GTK_MESSAGE_DIALOG (dialog), markup);
+//	g_free (markup);
+//
+//	markup = g_markup_printf_escaped ("<span weight=\'bold\'>%s</span>", "Messages");
+//	gtk_message_dialog_format_secondary_markup (GTK_MESSAGE_DIALOG (dialog), "%s", markup);
+//	g_free (markup);
+//
+//	gtk_widget_realize (dialog);
+//
+//	gdk_window_set_override_redirect (gtk_widget_get_window (dialog), TRUE);
+//	gdk_window_raise (gtk_widget_get_window (dialog));
+//	gtk_widget_destroy (hidden);
+//
+//	result = warning_dialog_run (dialog, TRUE);
+//
+////	fadeout_window_hide (xwindows, gdk_screen_get_display (screen));
+////	g_list_free (xwindows);
+//
+//	gtk_widget_destroy (dialog);
+//}
+
+static void
+message_dialog_destroyed_cb (GtkWindow *window,
+                             gpointer   data)
+{
+	gs_grab_release (g_gs_grab);
+	g_object_unref (g_gs_grab);
+	g_gs_grab = NULL;
+}
+
+static gboolean
+message_dialog_map_event_cb (GsmMessageDialog *window,
+                             GdkEvent         *event,
+                             gpointer          user_data)
+{
+	GdkDisplay *display;
+	GdkDevice  *device;
+	GdkMonitor *monitor;
+	int         x, y;
+
+	display = gdk_display_get_default ();
+
+	device = gdk_seat_get_pointer (gdk_display_get_default_seat (display));
+	gdk_device_get_position (device, NULL, &x, &y);
+	monitor = gdk_display_get_monitor_at_point (display, x, y);
+
+	gdk_display_flush (display);
+	if (gtk_widget_get_display (GTK_WIDGET (window)) == display
+			&& gsm_message_dialog_get_monitor (window) == monitor) {
+		gs_grab_move_to_window (g_gs_grab,
+                                gtk_widget_get_window (GTK_WIDGET (window)),
+                                gtk_window_get_screen (GTK_WINDOW (window)),
+                                FALSE);
+
+		gs_grab_release_mouse (g_gs_grab);
+
+	}
+
+	return FALSE;
+}
+
+static void
+message_dialog_grab_broken_cb (GsmMessageDialog   *window,
+                               GdkEventGrabBroken *event,
+                               gpointer            user_data)
+{
+	if (event->keyboard) {
+		gs_grab_keyboard_reset (g_gs_grab);
+	} else {
+		gs_grab_mouse_reset (g_gs_grab);
+	}
+}
+
+static void
+message_dialog_response_cb (GtkDialog *dialog,
+                            gint       response,
+                            gpointer   user_data)
+{
+	int dialog_type = GPOINTER_TO_INT (user_data);
+
+	if (dialog_type == DIALOG_TYPE_TERMINATE_SESSION) {
+		if (response == GTK_RESPONSE_OK) {
+			g_timeout_add (100, (GSourceFunc) logout_session_cb, NULL);
+		}
+	} else if (dialog_type == DIALOG_TYPE_TERMINATE_VPN) {
+		if (response == GTK_RESPONSE_YES) {
+			MessageDialogData *data = message_dialog_data_new (DIALOG_TYPE_TERMINATE_VPN, NULL);
+			g_clear_handle_id (&g_logout_timeout_id, g_source_remove);
+			g_logout_timeout_id = g_timeout_add_seconds (LOGOUT_POSTPONE_TIMEOUT,
+                                                         message_dialog_show_idle, data);
+		} else if (response == GTK_RESPONSE_NO) {
+			g_timeout_add (100, (GSourceFunc) logout_session_cb, NULL);
+		}
+	}
+
+	gtk_widget_destroy (GTK_WIDGET (dialog));
+}
+
+static gboolean
+message_dialog_show_idle (gpointer user_data)
+{
+	GdkDisplay *display;
+	int i, n_monitors;
+	const gchar *title, *message, *icon_name;
+	int dialog_type;
+
+	if (g_gs_grab || !user_data)
+		return FALSE;
+
+	MessageDialogData *data = (MessageDialogData *)user_data;
+	title = data->title ? data->title : "";
+	message = data->message ? data->message : "";
+	icon_name = data->icon_name ? data->icon_name : "";
+	dialog_type = data->dialog_type;
+
+	if (dialog_type != DIALOG_TYPE_TERMINATE_SESSION &&
+        dialog_type != DIALOG_TYPE_TERMINATE_VPN) {
+		goto done;
+	}
+
+	g_gs_grab = gs_grab_new ();
+
+	display = gdk_display_get_default ();
+	n_monitors = gdk_display_get_n_monitors (display);
+
+	gs_grab_grab_root (g_gs_grab, FALSE);
+
+	for (i = 0; i < n_monitors; i++) {
+		GdkMonitor *monitor = gdk_display_get_monitor (display, i);
+		if (!gdk_monitor_is_primary (monitor))
+			continue;
+
+		g_clear_handle_id (&g_logout_timeout_id, g_source_remove);
+
+		GsmMessageDialog *dialog = gsm_message_dialog_new (display, monitor);
+		gsm_message_dialog_set_title (dialog, title);
+		gsm_message_dialog_set_message (dialog, message);
+		gsm_message_dialog_set_icon_name (dialog, icon_name);
+
+		if (dialog_type == DIALOG_TYPE_TERMINATE_SESSION) {
+			gtk_dialog_add_buttons (GTK_DIALOG (dialog), _("_Ok"), GTK_RESPONSE_OK, NULL);
+			gtk_dialog_set_default_response (GTK_DIALOG (dialog), GTK_RESPONSE_OK);
+		} else if (dialog_type == DIALOG_TYPE_TERMINATE_VPN) {
+			gtk_dialog_add_buttons (GTK_DIALOG (dialog),
+                                    _("Ignore"), GTK_RESPONSE_YES,
+                                    _("Logout Now"), GTK_RESPONSE_NO, NULL);
+			gtk_dialog_set_default_response (GTK_DIALOG (dialog), GTK_RESPONSE_NO);
+		}
+
+		g_signal_connect (dialog, "destroy",
+                          G_CALLBACK (message_dialog_destroyed_cb), NULL);
+		g_signal_connect (dialog, "map-event",
+                          G_CALLBACK (message_dialog_map_event_cb), NULL);
+		g_signal_connect (dialog, "grab-broken-event",
+                          G_CALLBACK (message_dialog_grab_broken_cb), NULL);
+		g_signal_connect (dialog, "response",
+                          G_CALLBACK (message_dialog_response_cb), GINT_TO_POINTER (dialog_type));
+
+		gtk_widget_show (GTK_WIDGET (dialog));
+	}
+
+done:
+	message_dialog_data_free (data);
+
+	return FALSE;
+}
+
+
+static void
+on_vpn_signal_handler (GDBusProxy *proxy,
+                       gchar      *sender_name,
+                       gchar      *signal_name,
+                       GVariant   *parameters,
+                       gpointer    user_data)
+{
+	if (g_str_equal (signal_name, "ConnectionStateChanged")) {
+		gint32 result = -1;
+		if (parameters)
+			g_variant_get (parameters, "(i)", &result);
+
+		g_debug ("VPN ConnectionStateChanged : %d", result);
+
+		if (result != VPN_LOGIN_SUCCESS) {
+			MessageDialogData *data = message_dialog_data_new (DIALOG_TYPE_TERMINATE_VPN, NULL);
+			g_idle_add ((GSourceFunc) message_dialog_show_idle, data);
+		}
+	}
+}
+
+static void
+gooroom_vpn_service_name_vanished_cb (GDBusConnection *connection,
+                                      const gchar     *name,
+                                      gpointer         user_data)
+{
+	g_warning ("Gooroom VPN Service is not running");
+
+	MessageDialogData *data = NULL;
+
+	if (g_vpn_proxy) {
+		if (g_vpn_signal_id) {
+			g_signal_handler_disconnect (g_vpn_proxy, g_vpn_signal_id);
+			g_vpn_signal_id = 0;
+		}
+		g_clear_object (&g_vpn_proxy);
+		g_vpn_proxy = NULL;
+	}
+
+	data = message_dialog_data_new (DIALOG_TYPE_TERMINATE_VPN, NULL);
+	g_idle_add ((GSourceFunc) message_dialog_show_idle, data);
+}
+
+static void
+gooroom_vpn_service_name_appeared_cb (GDBusConnection *connection,
+                                      const gchar     *name,
+                                      const gchar     *name_owner,
+                                      gpointer         data)
+{
+	g_warning ("Gooroom VPN Service is running");
+
+	if (!g_vpn_proxy) {
+		GError *error = NULL;
+		g_vpn_proxy = g_dbus_proxy_new_for_bus_sync (G_BUS_TYPE_SYSTEM,
+                                           G_DBUS_CALL_FLAGS_NONE,
+                                           NULL,
+                                           "kr.gooroom.VPN",
+                                           "/kr/gooroom/VPN",
+                                           "kr.gooroom.VPN",
+                                           NULL,
+                                           &error);
+
+		if (!g_vpn_proxy || error) {
+			g_warning ("Couldn't get Gooroom VPN Service proxy");
+			if (error) {
+				g_error_free (error);
+			}
+			if (g_vpn_proxy) {
+				g_clear_object (&g_vpn_proxy);
+				g_vpn_proxy = NULL;
+			}
+			return;
+		}
+	}
+
+	if (g_vpn_signal_id) {
+		g_signal_handler_disconnect (g_vpn_proxy, g_vpn_signal_id);
+		g_vpn_signal_id = 0;
+	}
+
+	g_vpn_signal_id = g_signal_connect (G_OBJECT (g_vpn_proxy), "g-signal",
+                                        G_CALLBACK (on_vpn_signal_handler), NULL);
+}
+
 static void
 grac_name_vanished_cb (GDBusConnection *connection,
                        const gchar     *name,
@@ -1165,6 +1729,129 @@ start_init_thread (GTask        *task,
 }
 
 static void
+idle_triggered_idle_cb (GnomeIdleMonitor *monitor,
+                        guint             watch_id,
+                        gpointer          user_data)
+{
+	if (watch_id == g_idle_dim_id) {
+		gchar *duration = NULL;
+		guint idle_delay = 0, minutes = 0;
+
+		idle_delay = user_data ? GPOINTER_TO_UINT (user_data) : 0;
+		if (idle_delay == 0)
+			return;
+
+		if (idle_delay >= 60) {
+			guint minutes = idle_delay / 60;
+			duration = g_strdup_printf (ngettext ("for %u minute", "for %u minutes", minutes), minutes);
+		} else {
+			guint secs = idle_delay;
+			duration = g_strdup_printf (ngettext ("for %u second", "for %u seconds", secs), secs);
+		}
+
+		MessageDialogData *data = message_dialog_data_new (DIALOG_TYPE_TERMINATE_SESSION, duration);
+		g_free (duration);
+
+		g_idle_add ((GSourceFunc) message_dialog_show_idle, data);
+	}
+}
+
+static void
+register_idle_delay_watcher (GnomeIdleMonitor *idle_monitor,
+                             guint             timeout_dim)
+{
+	if (g_idle_dim_id) {
+		gnome_idle_monitor_remove_watch (idle_monitor, g_idle_dim_id);
+		g_idle_dim_id = 0;
+	}
+
+	if (timeout_dim > 0) {
+		g_idle_dim_id = gnome_idle_monitor_add_idle_watch (idle_monitor,
+                                               timeout_dim * IDLE_DELAY_TO_IDLE_DIM_MULTIPLIER * 1000,
+                                               idle_triggered_idle_cb,
+                                               GUINT_TO_POINTER (timeout_dim), NULL);
+	}
+}
+
+static void
+session_settings_changed_cb (GSettings   *settings,
+                             const gchar *key,
+                             gpointer     user_data)
+{
+	guint timeout_dim = 0;
+
+	timeout_dim = g_settings_get_uint (settings, "idle-delay");
+
+	register_idle_delay_watcher (g_idle_monitor, timeout_dim);
+}
+
+static void
+monitor_session_idle (void)
+{
+	guint timeout_dim = 0;
+
+	if (!g_idle_monitor)
+		g_idle_monitor = gnome_idle_monitor_new ();
+
+	if (!g_session_settings)
+		g_session_settings = g_settings_new ("org.gnome.desktop.session");
+
+	timeout_dim = g_settings_get_uint (g_session_settings, "idle-delay");
+
+	register_idle_delay_watcher (g_idle_monitor, timeout_dim);
+
+	g_signal_connect (g_session_settings, "changed",
+                      G_CALLBACK (session_settings_changed_cb), NULL);
+}
+
+static void
+monitor_vpn_service (void)
+{
+	g_bus_watch_name (G_BUS_TYPE_SYSTEM,
+                      "kr.gooroom.VPN",
+                      G_BUS_NAME_WATCHER_FLAGS_NONE,
+                      gooroom_vpn_service_name_appeared_cb,
+                      gooroom_vpn_service_name_vanished_cb,
+                      NULL, NULL);
+}
+
+static void
+do_lightdm_mode_stuff (void)
+{
+	gsize i, len;
+	gchar *data = NULL;
+
+	if (!g_file_test (LIGHTDM_MODE_PATH, G_FILE_TEST_EXISTS))
+		return;
+
+	g_file_get_contents (LIGHTDM_MODE_PATH, &data, &len, NULL);
+
+	for (i = 0; i < len; i++) {
+		if (data[i] == '\n')
+			data[i] = '\0';
+	}
+
+	if (data) {
+		if (g_str_equal (data, "ONLINE")) {
+			monitor_vpn_service ();
+			goto next;
+		} else if (g_str_equal (data, "OFFLINE")) {
+			goto next;
+		} else {
+			g_free (data);
+			return;
+		}
+	} else {
+		return;
+	}
+
+next:
+	g_free (data);
+
+	monitor_session_idle ();
+}
+
+static void
 name_acquired_handler (GDBusConnection *connection,
                        const gchar     *name,
                        gpointer         user_data)
@@ -1205,6 +1892,7 @@ name_acquired_handler (GDBusConnection *connection,
 	g_task_run_in_thread (task, start_init_thread);
 	g_object_unref (task);
 
+	do_lightdm_mode_stuff ();
 
 done:
 	g_free (grm_user);
@@ -1224,6 +1912,8 @@ name_lost_handler (GDBusConnection *connection,
 int
 main (int argc, char **argv)
 {
+	GtkCssProvider *provider;
+
 	setlocale (LC_ALL, "");
 	bindtextdomain (GETTEXT_PACKAGE, GNOMELOCALEDIR);
 	textdomain (GETTEXT_PACKAGE);
@@ -1239,12 +1929,17 @@ main (int argc, char **argv)
                                  NULL,
                                  NULL);
 
+	provider = gtk_css_provider_new ();
+	gtk_css_provider_load_from_resource (provider, "/kr/gooroom/session-manager/theme.css");
+	gtk_style_context_add_provider_for_screen (gdk_screen_get_default (),
+                                               GTK_STYLE_PROVIDER (provider),
+                                               GTK_STYLE_PROVIDER_PRIORITY_APPLICATION);
+	g_object_unref (provider);
+
 	gtk_main ();
 
-	if (g_timeout_id > 0) {
-		g_source_remove (g_timeout_id);
-		g_timeout_id = 0;
-	}
+	g_clear_handle_id (&g_timeout_id, g_source_remove);
+	g_clear_handle_id (&g_logout_timeout_id, g_source_remove);
 
 	if (g_gda_watch_id) {
 		g_bus_unwatch_name (g_gda_watch_id);
@@ -1256,23 +1951,32 @@ main (int argc, char **argv)
 		g_owner_id = 0;
 	}
 
+	if (g_idle_dim_id) {
+		gnome_idle_monitor_remove_watch (g_idle_monitor, g_idle_dim_id);
+		g_idle_dim_id = 0;
+	}
+
 	if (g_agent_proxy) {
 		if (g_agent_signal_id)
 			g_signal_handler_disconnect (g_agent_proxy, g_agent_signal_id);
-		g_object_unref (g_agent_proxy);
 	}
 
 	if (g_grac_proxy) {
 		if (g_grac_signal_id)
 			g_signal_handler_disconnect (g_grac_proxy, g_grac_signal_id);
-		g_object_unref (g_grac_proxy);
 	}
 
-	if(g_blacklist_settings)
-		g_object_unref (g_blacklist_settings);
+	if (g_vpn_proxy) {
+		if (g_vpn_signal_id)
+			g_signal_handler_disconnect (g_vpn_proxy, g_vpn_signal_id);
+	}
 
-	if(g_whitelist_settings)
-		g_object_unref (g_whitelist_settings);
+	g_clear_object (&g_agent_proxy);
+	g_clear_object (&g_grac_proxy);
+	g_clear_object (&g_idle_monitor);
+	g_clear_object (&g_blacklist_settings);
+	g_clear_object (&g_whitelist_settings);
+	g_clear_object (&g_session_settings);
 
 
 	return 0;

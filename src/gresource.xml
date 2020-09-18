@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<gresources>
+  <gresource prefix="/kr/gooroom/session-manager">
+    <file preprocess="xml-stripblanks">gsm-message-dialog.ui</file>
+  </gresource>
+
+  <gresource prefix="/kr/gooroom/session-manager">
+    <file compressed="true" alias="theme.css">../data/theme.css</file>
+  </gresource>
+</gresources>
+

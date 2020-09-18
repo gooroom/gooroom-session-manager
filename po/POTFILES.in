@@ -1,3 +1,4 @@
 src/gooroom-session-manager.c
 data/gooroom-session-manager.desktop.in
 data/kr.gooroom.SessionManager.policy.in.in
+[type: gettext/glade]src/gsm-message-dialog.ui

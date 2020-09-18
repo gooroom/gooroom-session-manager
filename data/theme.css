@@ -1,0 +1,32 @@
+
+.message-dialog {
+  -GtkDialog-action-area-border: 0; }
+  .message-dialog .message-dialog-box {
+    padding: 24px;
+    color: #000000;
+    border-radius: 10px 10px 8px 8px;
+    background-color: #ffffff;
+    box-shadow: 0 2px 5px 3px rgba(0, 0, 0, 0.35); }
+    .message-dialog .title-label {
+      font-size: 140%;
+      font-weight: bold; }
+    .message-dialog .message-label {
+      font-size: 110% ; }
+    .message-dialog button {
+      color: #ffffff;
+      padding: 4px 8px;
+      border-radius: 5px;
+      border-color: #4a73d6;
+      background-color: #4a73d6; }
+    .message-dialog button:active {
+      border-color: #3b61bd;
+      background-color: #3b61bd; }
+    .message-dialog button:checked {
+      border-color: #3b61bd;
+      background-color: #3b61bd; }
+    .message-dialog button:disabled {
+      border-color: #9b9b9b;
+      background-color: #9b9b9b; }
+    .message-dialog button:disabled label {
+      opacity: 0.6;
+      color: #ffffff; }
