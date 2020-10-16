@@ -42,11 +42,6 @@ AC_SUBST(GETTEXT_PACKAGE)
 AC_DEFINE_UNQUOTED(GETTEXT_PACKAGE, "$GETTEXT_PACKAGE", [Gettext Package])
 AM_GLIB_GNU_GETTEXT
 
-dnl ***************************
-dnl *** check for GSettings ***
-dnl ***************************
-GLIB_GSETTINGS
-
 dnl ***********************************
 dnl *** Check for required packages ***
 dnl ***********************************
@@ -58,8 +53,6 @@ PKG_CHECK_MODULES(JSON_C, json-c)
 PKG_CHECK_MODULES(DBUS_GLIB, dbus-glib-1 >= 0.84)
 PKG_CHECK_MODULES(LIBNOTIFY, libnotify)
 PKG_CHECK_MODULES(POLKIT, polkit-gobject-1 >= 0.103)
-PKG_CHECK_MODULES(X11, x11 >= 1.6.7)
-PKG_CHECK_MODULES(GNOME_DESKTOP, gnome-desktop-3.0 >= 3.30.2.1)
 
 AC_OUTPUT([
 Makefile
