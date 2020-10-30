@@ -7,7 +7,7 @@ msgid ""
 msgstr ""
 "Project-Id-Version: gooroom-session-manager 0.1.0\n"
 "Report-Msgid-Bugs-To: \n"
-"POT-Creation-Date: 2020-09-17 19:50+0900\n"
+"POT-Creation-Date: 2020-01-03 19:09+0900\n"
 "Language-Team: Gooroom <gooroom@gooroom.kr>\n"
 "Language: ko\n"
 "MIME-Version: 1.0\n"
@@ -15,27 +15,27 @@ msgstr ""
 "Content-Transfer-Encoding: 8bit\n"
 "Plural-Forms: nplurals=1; plural=0;\n"
 
-#: ../src/gooroom-session-manager.c:131
+#: ../src/gooroom-session-manager.c:69
 msgid "Notification"
 msgstr "알림"
 
-#: ../src/gooroom-session-manager.c:531
+#: ../src/gooroom-session-manager.c:469
 msgid "Update Blocking Function"
 msgstr "업데이트 차단 기능"
 
-#: ../src/gooroom-session-manager.c:534
+#: ../src/gooroom-session-manager.c:472
 msgid "Update blocking function has been disabled."
 msgstr "업데이트 차단 기능이 비활성화 되었습니다."
 
-#: ../src/gooroom-session-manager.c:537
+#: ../src/gooroom-session-manager.c:475
 msgid "Update blocking function has been enabled."
 msgstr "업데이트 차단 기능이 활성화 되었습니다."
 
-#: ../src/gooroom-session-manager.c:691
+#: ../src/gooroom-session-manager.c:629
 msgid "Gooroom Resource Access Control"
 msgstr "구름 자원 접근 제어"
 
-#: ../src/gooroom-session-manager.c:1084
+#: ../src/gooroom-session-manager.c:1022
 msgid ""
 "Could not found user's settings file.\n"
 "After 10 seconds, the user will be logged out."
@@ -43,59 +43,9 @@ msgstr ""
 "사용자 환경설정 파일을 찾을 수 없습니다.\n"
 "10초 후 로그아웃 됩니다."
 
-#: ../src/gooroom-session-manager.c:1086
+#: ../src/gooroom-session-manager.c:1024
 msgid "Terminating Session"
 msgstr "세션 종료"
-
-#: ../src/gooroom-session-manager.c:1456
-msgid "_Ok"
-msgstr "확인"
-
-#: ../src/gooroom-session-manager.c:1460
-msgid "Logout Now"
-msgstr "지금 로그아웃"
-
-#: ../src/gooroom-session-manager.c:1461
-msgid "Ignore"
-msgstr "연장하기(30분)"
-
-#: ../src/gooroom-session-manager.c:1498 ../src/gooroom-session-manager.c:1528
-msgid "VPN Service Error Notice"
-msgstr "업무망 접속장애 안내"
-
-#: ../src/gooroom-session-manager.c:1499 ../src/gooroom-session-manager.c:1530
-msgid ""
-"There is a problem with VPN connection. In order to use the remote terminal "
-"safely, the terminal must be shut down. Would you like to extend your device "
-"usage?"
-msgstr ""
-"업무망 접속이 원할하지 않습니다. 안전한 원격 단말 사용을 위해 단말을 종료해야 "
-"합니다. 단말 사용을 연장하시겠습니까?"
-
-#: ../src/gooroom-session-manager.c:1727
-#, c-format
-msgid "for %u minute"
-msgid_plural "for %u minutes"
-msgstr[0] "%d분 동안"
-
-#: ../src/gooroom-session-manager.c:1730
-#, c-format
-msgid "for %u second"
-msgid_plural "for %u seconds"
-msgstr[0] "%d초 동안"
-
-#: ../src/gooroom-session-manager.c:1739
-msgid "Automatic Logout Notice"
-msgstr "자동 로그아웃 안내"
-
-#: ../src/gooroom-session-manager.c:1740
-#, c-format
-msgid ""
-"Since there is no use %s after logging in, you are automatically logged out "
-"for a safe working environment."
-msgstr ""
-"로그인 후 %s 사용이 없어 시스템이 자동으로 로그아웃 됩니다. 안전한 업무환경을 "
-"위해서 다시 로그인 하여 주시기 바랍니다."
 
 #: ../data/kr.gooroom.SessionManager.policy.in.in.h:1
 msgid "Gooroom Session Manager"
