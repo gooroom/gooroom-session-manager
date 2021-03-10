@@ -241,14 +241,32 @@ static void
 dpms_off_time_update (gint32 value)
 {
 	gint32 val;
+	GSettings *settings;
 
 	val = (value < 0) ? 0 : value * 60;
 	val = (value * 60 > G_MAXUINT) ? G_MAXUINT : value * 60;
 
-	GSettings *settings;
-
 	settings = g_settings_new ("org.gnome.desktop.session");
 	g_settings_set_uint (settings, "idle-delay", val);
+	g_object_unref (settings);
+}
+
+static void
+sleep_inactive_time_update (gint32 value)
+{
+	gint32 val;
+	GSettings *settings;
+
+	val = (value < 0) ? 0 : value * 60;
+	val = (value * 60 > G_MAXUINT) ? G_MAXUINT : value * 60;
+
+	settings = g_settings_new ("org.gnome.settings-daemon.plugins.power");
+	g_settings_set_int (settings, "sleep-inactive-ac-timeout", val);
+	g_settings_set_int (settings, "sleep-inactive-battery-timeout", val);
+	/* blank = 0 suspend = 1 shutdown = 2 hibernate = 3 interactive = 4 nothing = 5 logout = 6 */
+	g_settings_set_enum (settings, "sleep-inactive-ac-type", 1);
+	g_settings_set_enum (settings, "sleep-inactive-battery-type", 1);
+
 	g_object_unref (settings);
 }
 
@@ -300,6 +318,35 @@ get_dpms_off_time_from_json (const gchar *data)
 			const char *val = json_object_get_string (obj4);
 			if (val && g_strcmp0 (val, "200") == 0) {
 				json_object *obj = JSON_OBJECT_GET (obj3, "screen_time");
+				ret = g_strdup (json_object_get_string (obj));
+			}
+		}
+		json_object_put (root_obj);
+	}
+
+	return ret;
+}
+
+static gchar *
+get_sleep_inactive_time_from_json (const gchar *data)
+{
+	g_return_val_if_fail (data != NULL, NULL);
+
+	gchar *ret = NULL;
+
+	enum json_tokener_error jerr = json_tokener_success;
+	json_object *root_obj = json_tokener_parse_verbose (data, &jerr);
+
+	if (jerr == json_tokener_success) {
+		json_object *obj1 = NULL, *obj2 = NULL, *obj3 = NULL, *obj4 = NULL;
+		obj1 = JSON_OBJECT_GET (root_obj, "module");
+		obj2 = JSON_OBJECT_GET (obj1, "task");
+		obj3 = JSON_OBJECT_GET (obj2, "out");
+		obj4 = JSON_OBJECT_GET (obj3, "status");
+		if (obj4) {
+			const char *val = json_object_get_string (obj4);
+			if (val && g_strcmp0 (val, "200") == 0) {
+				json_object *obj = JSON_OBJECT_GET (obj3, "sleep_inactive_time");
 				ret = g_strdup (json_object_get_string (obj));
 			}
 		}
@@ -448,7 +495,52 @@ set_dpms_off_time (void)
 				dpms_off_time_update (atoi (value));
 			} else {
 				g_warning ("Failed to get dpms_off_time from Gooroom Agent Service");
-				dpms_off_time_update (0);
+			}
+			g_free (value);
+			g_free (data);
+		}
+
+		g_free (arg);
+	}
+}
+
+static void
+set_sleep_inactive_time (void)
+{
+	if (!g_agent_proxy)
+		g_agent_proxy = proxy_get ("agent");
+
+	if (g_agent_proxy) {
+		const gchar *json;
+		gchar *arg = NULL, *data = NULL;
+		GVariant *variant = NULL;
+
+		json = "{\"module\":{\"module_name\":\"config\",\"task\":{\"task_name\":\"sleep_inactive_time\",\"in\":{\"login_id\":\"%s\"}}}}";
+
+		arg = g_strdup_printf (json, g_get_user_name ());
+
+		variant = g_dbus_proxy_call_sync (g_agent_proxy,
+                                          "do_task",
+                                          g_variant_new ("(s)", arg),
+                                          G_DBUS_CALL_FLAGS_NONE, -1,
+                                          NULL, NULL);
+
+		if (variant) {
+			GVariant *v = NULL;
+			g_variant_get (variant, "(v)", &v);
+			if (v) {
+				data = g_variant_dup_string (v, NULL);
+				g_variant_unref (v);
+			}
+			g_variant_unref (variant);
+		}
+
+		if (data) {
+			gchar *value = get_sleep_inactive_time_from_json (data);
+			if (value) {
+				sleep_inactive_time_update (atoi (value));
+			} else {
+				g_warning ("Failed to get sleep_inactive_time from Gooroom Agent Service");
 			}
 			g_free (value);
 			g_free (data);
@@ -646,6 +738,10 @@ agent_signal_cb (GDBusProxy *proxy,
 		gint32 value = 0;
 		g_variant_get (parameters, "(i)", &value);
 		dpms_off_time_update (value);
+	} else if (g_str_equal (signal_name, "sleep_time")) {
+		gint32 value = 0;
+		g_variant_get (parameters, "(i)", &value);
+		sleep_inactive_time_update (value);
 	} else if (g_str_equal (signal_name, "agent_msg")) {
 		GVariant *v = NULL;
 		gchar *data = NULL;
@@ -1087,6 +1183,7 @@ agent_job_thread (GTask        *task,
 		send_request_to_gooroom_agent ("get_update_operation_with_loginid");
 
 		set_dpms_off_time ();
+		set_sleep_inactive_time ();
 		set_controlcenter_whitelist ();
 		set_application_blacklist ();
 	}
