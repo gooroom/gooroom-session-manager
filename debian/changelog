@@ -1,3 +1,12 @@
+gooroom-session-manager (0.3.3+grm2u1) unstable; urgency=medium
+
+  [ cjheo ]
+  * [eb5c7c58] GPMS의 시스템 절전 시간 변경기능 추가로 인한 업데이트
+
+  [ Gooroom Autobuilder ]
+
+ -- Gooroom Autobuilder <jenkins@gooroom.kr>  Wed, 10 Mar 2021 17:15:20 +0900
+
 gooroom-session-manager (0.3.2+grm2u1) unstable; urgency=medium
 
   [ Heo, ChangJu ]
