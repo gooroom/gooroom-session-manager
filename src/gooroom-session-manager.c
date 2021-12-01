@@ -556,7 +556,7 @@ do_update_operation (gint32 value)
 	gchar *cmdline = NULL;
 	NotifyNotification *notification;
 
-	const gchar *message;
+	const gchar *message = NULL;
 	const gchar *icon = "software-update-available-symbolic";
 	const gchar *summary = _("Update Blocking Function");
 
