@@ -1,3 +1,10 @@
+gooroom-session-manager (0.3.4+grm3u2) unstable; urgency=medium
+
+  [ jongkyung.woo ]
+  * [b988bbe4] Rebuild on gooroom-3.0
+
+ -- Gooroom Autobuilder <jenkins@gooroom.kr>  Sun, 05 Dec 2021 16:53:20 +0900
+
 gooroom-session-manager (0.3.4+grm3u1) unstable; urgency=medium
 
   [ subin.kim ]
