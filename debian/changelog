@@ -1,3 +1,10 @@
+gooroom-session-manager (0.3.4+grm3u1) unstable; urgency=medium
+
+  [ subin.kim ]
+  * [eb8e2b6e] Fixed static code analysis issue
+
+ -- Gooroom Autobuilder <jenkins@gooroom.kr>  Sun, 05 Dec 2021 16:37:14 +0900
+
 gooroom-session-manager (0.3.3+grm2u1) unstable; urgency=medium
 
   [ cjheo ]
