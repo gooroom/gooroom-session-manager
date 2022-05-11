@@ -562,7 +562,7 @@ do_update_operation (gint32 value)
 
 	if (value == 0) {
 		message = _("Update blocking function has been disabled.");
-		cmdline = g_find_program_in_path ("gooroom-update-launcher");
+		cmdline = g_find_program_in_path ("/usr/lib/gooroom/gooroomUpdate/gooroomUpdate.py");
 	} else if (value == 1) {
 		message = _("Update blocking function has been enabled.");
 		gchar *cmd = g_find_program_in_path ("pkill");
