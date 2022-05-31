@@ -45,9 +45,9 @@ find_full_desktop_id (const gchar *find_str)
 		if (!appinfo)
 			continue;
 
-		const gchar *id;
+		const gchar *id = NULL;
 		GDesktopAppInfo *dt_info;
-		gchar *locale_name, *name, *exec;
+		gchar *locale_name = NULL, *name = NULL, *exec = NULL;
 
 		dt_info = G_DESKTOP_APP_INFO (appinfo);
 
@@ -173,12 +173,14 @@ main (int argc, char **argv)
 		guint i = 0;
 		for (i = 1; argv[i]; i++) {
 			gchar *full_desktop_id = find_full_desktop_id (argv[i]);
-			g_debug ("Blacklist Destkop = %s", full_desktop_id);
-			if (!g_str_has_suffix (full_desktop_id, "gooroomupdate.desktop")) {
-				/* remove exec permission */
-				make_exec_executable (full_desktop_id, FALSE);
+                        if (full_desktop_id) {
+				g_debug ("Blacklist Destkop = %s", full_desktop_id);
+				if (!g_str_has_suffix (full_desktop_id, "gooroomupdate.desktop")) {
+					/* remove exec permission */
+					make_exec_executable (full_desktop_id, FALSE);
+				}
+				g_free (full_desktop_id);
 			}
-			g_free (full_desktop_id);
 		}
 	}
 
