@@ -1,0 +1,30 @@
+#!/bin/sh
+ICONS="/usr/share/icons"
+VALUE="\[User Theme $1\]"
+FILE=$2
+
+if [ -z "$1" ]
+then
+	return
+fi
+
+#remove theme in icon theme
+ICON_FILE="$ICONS/$1"
+if [ ! -z "$ICON_FILE" ]
+then
+  rm $ICON_FILE -rf
+  echo "remove icnos theme $1"
+fi
+
+#remove theme in control theme
+if [ -z "$FILE" ]
+then
+  FILE="/usr/share/gnome-control-center/themes/gooroom-themes.ini"
+fi
+
+START=$(sed -n "/$VALUE/=" $FILE)
+if [ ! -z "$START" ]
+then
+  END=`expr "$START" "+" 6`
+  sed -i "$START, $END d" $FILE 
+fi

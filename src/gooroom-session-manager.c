@@ -374,8 +374,8 @@ set_theme (const gchar *theme_idx)
 		icon_theme = "Gooroom-Papirus";
 		background = BACKGROUND_PATH"gooroom_theme_bg_3.jpg";
 	} else {
-		icon_theme = "Gooroom-Papirus";
-		background = BACKGROUND_PATH"gooroom_theme_bg_3.jpg";
+		icon_theme = g_strdup(theme_idx);
+		background = g_strdup_printf ("%sgooroom_user_theme_bg_%s.jpg", BACKGROUND_PATH, theme_idx);
 	}
 
 	if (!g_file_test (background, G_FILE_TEST_EXISTS))
@@ -617,6 +617,41 @@ save_settings (gchar *list, const gchar *id)
 }
 
 static void
+add_theme (gchar *data)
+{
+	gchar *pkexec, *cmd;
+
+	pkexec = g_find_program_in_path ("pkexec");
+
+	if (data) {
+		cmd = g_strdup_printf ("%s %s %s", pkexec, GOOROOM_THEME_ADD_HELPER, data);
+	}
+
+	g_spawn_command_line_sync (cmd, NULL, NULL, NULL, NULL);
+
+	g_free (pkexec);
+	g_free (cmd);
+}
+
+static void
+delete_theme (gchar *data)
+{
+	gchar *pkexec, *cmd;
+
+	pkexec = g_find_program_in_path ("pkexec");
+
+	if (data) {
+		//data is ID
+		cmd = g_strdup_printf ("%s %s %s", pkexec, GOOROOM_THEME_DELETE_HELPER, data);
+	}
+
+	g_spawn_command_line_sync (cmd, NULL, NULL, NULL, NULL);
+
+	g_free (pkexec);
+	g_free (cmd);
+}
+
+static void
 grac_notifications_close (GList *list)
 {
 	GList *l = NULL;
@@ -781,6 +816,30 @@ agent_signal_cb (GDBusProxy *proxy,
 		if (items) {
 			save_settings (items, "controlcenter_items");
 			g_free (items);
+		}
+	} else if (g_str_equal (signal_name, "add_theme")) {
+		GVariant *v = NULL;
+		gchar *data = NULL;
+		g_variant_get (parameters, "(v)", &v);
+		if (v) {
+			data = g_variant_dup_string (v, NULL);
+			g_variant_unref (v);
+			if (data) {
+				add_theme (data);
+				g_free (data);
+			}
+		}
+	} else if (g_str_equal (signal_name, "delete_theme")) {
+		GVariant *v = NULL;
+		gchar *data = NULL;
+		g_variant_get (parameters, "(v)", &v);
+		if (v) {
+			data = g_variant_dup_string (v, NULL);
+			g_variant_unref (v);
+			if (data) {
+				delete_theme (data);
+				g_free (data);
+			}
 		}
 	}
 }

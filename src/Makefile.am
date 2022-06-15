@@ -1,7 +1,8 @@
 pkglibexec_PROGRAMS = \
 	gooroom-session-manager \
 	grac-reload-helper \
-	gooroom-update-blacklist-helper
+	gooroom-update-blacklist-helper\
+	gooroom-theme-helper
 
 gooroom_session_manager_SOURCES = \
 	panel-glib.c \
@@ -11,6 +12,8 @@ gooroom_session_manager_CFLAGS = \
 	-DGNOMELOCALEDIR=\"$(localedir)\"	\
 	-DGRAC_RELOAD_HELPER=\"$(pkglibexecdir)/grac-reload-helper\"  \
 	-DGOOROOM_UPDATE_BLACKLIST_HELPER=\"$(pkglibexecdir)/gooroom-update-blacklist-helper\"  \
+	-DGOOROOM_THEME_ADD_HELPER=\"$(pkglibexecdir)/gooroom-theme-helper\"	\
+	-DGOOROOM_THEME_DELETE_HELPER=\"$(pkglibexecdir)/gooroom-theme-delete-helper\"	\
 	$(GTK_CFLAGS) 		\
 	$(GLIB_CFLAGS) 	\
 	$(JSON_C_CFLAGS)	\
@@ -48,4 +51,20 @@ gooroom_update_blacklist_helper_CFLAGS = \
 
 gooroom_update_blacklist_helper_LDFLAGS = \
 	$(GLIB_LIBS) \
+	$(GIO_UNIX_LIBS)
+
+gooroom_theme_helper_SOURCES = \
+	gooroom-theme-helper.c
+
+gooroom_theme_helper_CFLAGS = \
+	-DGNOMELOCALEDIR=\"$(localedir)\"	\
+	$(GTK_CFLAGS)	\
+	$(GLIB_CFLAGS) \
+	$(JSON_C_CFLAGS)	\
+	$(GIO_UNIX_CFLAGS)
+
+gooroom_theme_helper_LDFLAGS = \
+	$(GTK_LIBS)	\
+	$(GLIB_LIBS) \
+	$(JSON_C_LIBS)  \
 	$(GIO_UNIX_LIBS)

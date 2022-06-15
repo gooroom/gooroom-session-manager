@@ -7,6 +7,8 @@ autostart_DATA = gooroom-session-manager.desktop
 kr.gooroom.SessionManager.policy.in: kr.gooroom.SessionManager.policy.in.in Makefile
 	$(AM_V_GEN) sed -e "s|\@pkglibexecdir\@|$(pkglibexecdir)|" $< > $@
 
+themedir = $(pkglibexecdir)
+theme_SCRIPTS = gooroom-theme-delete-helper
 
 @INTLTOOL_POLICY_RULE@
 
