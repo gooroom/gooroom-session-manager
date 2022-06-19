@@ -1,3 +1,13 @@
+gooroom-session-manager (0.3.6+grm3u1) unstable; urgency=medium
+
+  [ heejun.jang ]
+  * [9f4767fe] 보안 취약점 패치 구름 공통버전 적용
+
+  [ donghun lee ]
+  * [d9d52f1e] Added new theme helper
+
+ -- Gooroom Autobuilder <jenkins@gooroom.kr>  Mon, 20 Jun 2022 08:30:10 +0900
+
 gooroom-session-manager (0.3.5+grm3u1) unstable; urgency=medium
 
   [ subin.kim ]
