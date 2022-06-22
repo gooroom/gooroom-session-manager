@@ -558,21 +558,21 @@ do_update_operation (gint32 value)
 
 	const gchar *message = NULL;
 	const gchar *icon = "software-update-available-symbolic";
-	const gchar *summary = _("Update Blocking Function");
+	const gchar *summary = _("Package Addition/Deletion Blocking Function");
 
 	if (value == 0) {
-		message = _("Update blocking function has been disabled.");
-		cmdline = g_find_program_in_path ("/usr/lib/gooroom/gooroomUpdate/gooroomUpdate.py");
+		message = _("Package Addition/Deletion Blocking function has been disabled.");
+//		cmdline = g_find_program_in_path ("/usr/lib/gooroom/gooroomUpdate/gooroomUpdate.py");
 	} else if (value == 1) {
-		message = _("Update blocking function has been enabled.");
-		gchar *cmd = g_find_program_in_path ("pkill");
-		if (cmd)
-			cmdline = g_strdup_printf ("%s -f '/usr/lib/gooroom/gooroomUpdate/gooroomUpdate.py'", cmd);
-		g_free (cmd);
+		message = _("Package Addition/Deletion Blocking function has been enabled.");
+//		gchar *cmd = g_find_program_in_path ("pkill");
+//		if (cmd)
+//			cmdline = g_strdup_printf ("%s -f '/usr/lib/gooroom/gooroomUpdate/gooroomUpdate.py'", cmd);
+//		g_free (cmd);
 	}
 
-	g_spawn_command_line_async (cmdline, NULL);
-	g_free (cmdline);
+//	g_spawn_command_line_async (cmdline, NULL);
+//	g_free (cmdline);
 
 	show_notification (summary, message, icon);
 }

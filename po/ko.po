@@ -20,16 +20,16 @@ msgid "Notification"
 msgstr "알림"
 
 #: ../src/gooroom-session-manager.c:561
-msgid "Update Blocking Function"
-msgstr "업데이트 차단 기능"
+msgid "Package Addition/Deletion Blocking Function"
+msgstr "패키지 추가/삭제 차단 기능"
 
 #: ../src/gooroom-session-manager.c:564
-msgid "Update blocking function has been disabled."
-msgstr "업데이트 차단 기능이 비활성화 되었습니다."
+msgid "Package Addition/Deletion Blocking function has been disabled."
+msgstr "패키지 추가/삭제 차단 기능이 비활성화 되었습니다."
 
 #: ../src/gooroom-session-manager.c:567
-msgid "Update blocking function has been enabled."
-msgstr "업데이트 차단 기능이 활성화 되었습니다."
+msgid "Package Addition/Deletion Blocking function has been enabled."
+msgstr "패키지 추가/삭제 차단 기능이 활성화 되었습니다."
 
 #: ../src/gooroom-session-manager.c:721
 msgid "Gooroom Resource Access Control"
