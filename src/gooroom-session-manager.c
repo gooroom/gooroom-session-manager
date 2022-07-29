@@ -45,6 +45,8 @@
 #define	BACKGROUND_PATH         "/usr/share/backgrounds/gooroom/"
 #define	DEFAULT_BACKGROUND      "/usr/share/images/desktop-base/desktop-background.xml"
 #define GCSR_CONF               "/etc/gooroom/gooroom-client-server-register/gcsr.conf"
+#define DEFAULT_THEME_ICON      "Gooroom-Numix-Circle"
+#define DEFAULT_THEME_BG        "file:///usr/share/backgrounds/gooroom/gooroom_theme_bg_4.jpg"
 
 
 static GSettings  *g_blacklist_settings = NULL;
@@ -375,7 +377,7 @@ set_theme (const gchar *theme_idx)
 		background = BACKGROUND_PATH"gooroom_theme_bg_3.jpg";
 	} else {
 		icon_theme = g_strdup(theme_idx);
-		background = g_strdup_printf ("%sgooroom_user_theme_bg_%s.jpg", BACKGROUND_PATH, theme_idx);
+		background = g_strdup_printf ("%sgooroom_user_theme_bg_%s.png", BACKGROUND_PATH, theme_idx);
 	}
 
 	if (!g_file_test (background, G_FILE_TEST_EXISTS))
@@ -617,14 +619,14 @@ save_settings (gchar *list, const gchar *id)
 }
 
 static void
-add_theme (gchar *data)
+add_theme (gchar *data, int type)
 {
 	gchar *pkexec, *cmd;
 
 	pkexec = g_find_program_in_path ("pkexec");
 
 	if (data) {
-		cmd = g_strdup_printf ("%s %s %s", pkexec, GOOROOM_THEME_ADD_HELPER, data);
+		cmd = g_strdup_printf ("%s %s %d '%s'", pkexec, GOOROOM_THEME_ADD_HELPER, type, data);
 	}
 
 	g_spawn_command_line_sync (cmd, NULL, NULL, NULL, NULL);
@@ -636,14 +638,26 @@ add_theme (gchar *data)
 static void
 delete_theme (gchar *data)
 {
-	gchar *pkexec, *cmd;
+	gchar *pkexec, *cmd, *theme;
+	GSettings *settings = NULL;
+
+	if (!data) return;
 
 	pkexec = g_find_program_in_path ("pkexec");
 
-	if (data) {
-		//data is ID
-		cmd = g_strdup_printf ("%s %s %s", pkexec, GOOROOM_THEME_DELETE_HELPER, data);
+	settings = g_settings_new ("org.gnome.desktop.interface");
+	theme = g_settings_get_string (settings, "icon-theme");
+	if (g_strcmp0 (theme, data) == 0) {
+		g_settings_set_string (settings, "icon-theme", DEFAULT_THEME_ICON);
+		g_object_unref (settings);
+
+		settings = g_settings_new ("org.gnome.desktop.background");
+		g_settings_set_string (settings, "picture-uri", DEFAULT_THEME_BG);
 	}
+	g_free (theme);
+	g_object_unref (settings);
+
+	cmd = g_strdup_printf ("%s %s %s", pkexec, GOOROOM_THEME_DELETE_HELPER, data);
 
 	g_spawn_command_line_sync (cmd, NULL, NULL, NULL, NULL);
 
@@ -825,7 +839,19 @@ agent_signal_cb (GDBusProxy *proxy,
 			data = g_variant_dup_string (v, NULL);
 			g_variant_unref (v);
 			if (data) {
-				add_theme (data);
+				add_theme (data, 0);
+				g_free (data);
+			}
+		}
+	} else if (g_str_equal (signal_name, "modify_theme")) {
+		GVariant *v = NULL;
+		gchar *data = NULL;
+		g_variant_get (parameters, "(v)", &v);
+		if (v) {
+			data = g_variant_dup_string (v, NULL);
+			g_variant_unref (v);
+			if (data) {
+				add_theme (data, 1);
 				g_free (data);
 			}
 		}

@@ -8,12 +8,12 @@
 #include <glib/gi18n.h>
 #include <json-c/json.h>
 
-#define BACKGROUND_PATH "/usr/share/backgrounds/gooroom" 
+#define BACKGROUND_PATH "/usr/share/backgrounds/gooroom"
 #define ICONS_PATH "/usr/share/icons"
 #define THEME_CONTROL_FILE "/usr/share/gnome-control-center/themes/gooroom-themes.ini"
 
 static const char *g_index_template =
-"[Icon Theme]\nName=%s\nComment=%s\nInherits=Gooroom-Portable\n\n\
+"[Icon Theme]\nName=%s\nComment=%s\nInherits=Gooroom-Numix-Circle\n\n\
 # Directory list\nDirectories=apps/scalable\n\n\
 [apps/scalable]\nContext=Applications\nSize=48\nMinSize=16\nMaxSize=512\nType=Scalable\n";
 
@@ -35,6 +35,10 @@ JSON_OBJECT_GET (json_object *root_obj, const char *key)
 static void
 download (char *url, char *dest)
 {
+	gboolean valid = g_uri_is_valid (url, G_URI_FLAGS_NONE, NULL);
+
+	if (!valid) return;
+
 	gchar *wget = g_find_program_in_path ("wget");
 	if (wget) {
 		gchar *cmd = g_strdup_printf ("%s --no-check-certificate %s -q -O %s", wget, url, dest);
@@ -43,6 +47,14 @@ download (char *url, char *dest)
 	}
 	g_free (wget);
 	g_free (url);
+}
+
+static void
+filecopy (const char *src, const char*dest)
+{
+		gchar *cmd = g_strdup_printf ("cp %s %s", src, dest);
+		g_spawn_command_line_sync (cmd, NULL, NULL, NULL, NULL);
+		g_free (cmd);
 }
 
 static void
@@ -78,12 +90,12 @@ create_theme_file_from_data (gchar *file_path, gchar *data, gboolean is_delete, 
 }
 
 static void
-add_theme (char *data)
+add_theme (char *type, char *data)
 {
 	gchar *background_path = NULL;
 
 	const char *theme_id = NULL, *theme_name = NULL, *theme_comment = NULL;
-	const char *theme_background= NULL, *theme_icons= NULL;
+	const char *theme_background= NULL;
 
 	enum json_tokener_error jerr = json_tokener_success;
 	json_object *root_obj = json_tokener_parse_verbose (data, &jerr);
@@ -101,20 +113,14 @@ add_theme (char *data)
 	obj5 = JSON_OBJECT_GET (root_obj, "themeIcons");
 
 	theme_id = json_object_get_string (obj1);
-	g_print ("Theme Id: %s\n", theme_id);
-
 	theme_name = json_object_get_string (obj2);
-	g_print ("Theme Name : %s\n", theme_name);
-
 	theme_comment = json_object_get_string (obj3);
-	g_print ("Theme Comment : %s\n", theme_comment);
 
 	if (obj4) {
-		theme_background = json_object_get_string (obj5);
 		background_path = g_strdup_printf ("%s/gooroom_user_theme_bg_%s.png", BACKGROUND_PATH, theme_id);
+		theme_background = json_object_get_string (obj4);
 		download (g_strdup(theme_background), background_path);
 	}
-	g_print ("Theme Background : %s\n", background_path);
 
 	if (obj5) {
 		gint i = 0, len = 0;
@@ -138,30 +144,38 @@ add_theme (char *data)
 			if (!(name_obj && info_obj && url_obj)) continue;
 
 			name = json_object_get_string (name_obj);
+			//if (g_str_has_prefix (name, "4_"))  continue;
+
 			info = json_object_get_string (info_obj);
 
 			gchar **tokens = g_strsplit (name, ".", -1);
-			if (tokens != NULL && tokens[1] != NULL) {
-				fullname = g_strdup_printf ("%s.%s", info, tokens[1]);
+			gint length =  g_strv_length (tokens) - 1;
+
+			if (tokens != NULL && tokens[length] != NULL) {
+				fullname = g_strdup_printf ("%s.%s", info, tokens[length]);
 			}
 			g_strfreev (tokens);
 
 			url = json_object_get_string (url_obj);
 			gchar *dest = g_strdup_printf ("%s/%s",icon_path, fullname);
 			download (g_strdup (url), dest);
-			g_print ("%s\n", dest);
 			g_free (dest);
 		}
 	}
 
-	//create index file;
-	gchar *index_file = g_strdup_printf ("%s/%s/index.theme",ICONS_PATH, theme_id);
-	gchar *index_template = g_strdup_printf (g_index_template, theme_name, theme_comment);
-	create_theme_file_from_data (index_file, index_template, TRUE, FALSE);
-	//control-center theme
-	const gchar *backgroundfile = g_strdup_printf ("file://%s", background_path);
-	gchar *theme_template = g_strdup_printf (g_theme_template, theme_id, theme_id, theme_name, theme_name, theme_name, backgroundfile, theme_id);
-	create_theme_file_from_data (g_strdup(THEME_CONTROL_FILE), theme_template, FALSE, TRUE);
+	if (g_strcmp0 (type, "0") == 0) {
+		//create index file;
+		gchar *index_file = g_strdup_printf ("%s/%s/index.theme",ICONS_PATH, theme_id);
+		gchar *index_template = g_strdup_printf (g_index_template, theme_name, theme_comment);
+		create_theme_file_from_data (index_file, index_template, TRUE, FALSE);
+		//control-center theme
+		const gchar *backgroundfile = g_strdup_printf ("file://%s", background_path);
+		gchar *theme_template = g_strdup_printf (g_theme_template, theme_id, theme_id, theme_name, theme_name, theme_name, backgroundfile, theme_id);
+		create_theme_file_from_data (g_strdup(THEME_CONTROL_FILE), theme_template, FALSE, TRUE);
+	}
+	//control-center thumbnail
+	const gchar *thumbnail_path= g_strdup_printf ("%s/%s/thumbnail.png",ICONS_PATH, theme_id);
+	filecopy (background_path, thumbnail_path);
 
 	g_free (background_path);
 	json_object_put (obj1);
@@ -171,12 +185,12 @@ add_theme (char *data)
 int
 main(int argc, char **argv)
 {
-  setlocale (LC_ALL, "");
-  bindtextdomain (GETTEXT_PACKAGE, GNOMELOCALEDIR);
-  textdomain (GETTEXT_PACKAGE);
+	setlocale (LC_ALL, "");
+	bindtextdomain (GETTEXT_PACKAGE, GNOMELOCALEDIR);
+	textdomain (GETTEXT_PACKAGE);
 
 	if (argc > 1)
-		add_theme (argv[1]);
+		add_theme (argv[1], argv[2]);
 
 	return 0;
 }
