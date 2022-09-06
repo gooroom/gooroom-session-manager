@@ -1,3 +1,10 @@
+gooroom-session-manager (0.3.9+grm3u1) unstable; urgency=medium
+
+  [ donghun.lee ]
+  * [aaa69261] Updated theme helper
+
+ -- Gooroom Autobuilder <jenkins@gooroom.kr>  Tue, 06 Sep 2022 17:15:04 +0900
+
 gooroom-session-manager (0.3.8+grm3u1) unstable; urgency=medium
 
   [ donghun lee ]
