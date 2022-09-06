@@ -26,4 +26,26 @@
     </defaults>
     <annotate key="org.freedesktop.policykit.exec.path">@pkglibexecdir@/gooroom-update-blacklist-helper</annotate>
   </action>
+
+  <action id="kr.gooroom.SessionManager.update-theme">
+    <_description>Gooroom Session Manager</_description>
+    <_message>Authentication is required to update theme.</_message>
+    <defaults>
+      <allow_any>no</allow_any>
+      <allow_inactive>no</allow_inactive>
+      <allow_active>yes</allow_active>
+    </defaults>
+    <annotate key="org.freedesktop.policykit.exec.path">@pkglibexecdir@/gooroom-theme-helper</annotate>
+  </action>
+
+  <action id="kr.gooroom.SessionManager.delete-theme">
+    <_description>Gooroom Session Manager</_description>
+    <_message>Authentication is required to delete theme.</_message>
+    <defaults>
+      <allow_any>no</allow_any>
+      <allow_inactive>no</allow_inactive>
+      <allow_active>yes</allow_active>
+    </defaults>
+    <annotate key="org.freedesktop.policykit.exec.path">@pkglibexecdir@/gooroom-theme-delete-helper</annotate>
+  </action>_
 </policyconfig>
