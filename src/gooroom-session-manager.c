@@ -373,6 +373,9 @@ set_theme (const gchar *theme_idx)
 	} else if (g_str_equal (theme_idx, "3")) {
 		icon_theme = "Gooroom-Papirus";
 		background = BACKGROUND_PATH"gooroom_theme_bg_3.jpg";
+	} else if (g_str_equal (theme_idx, "4")) {
+		icon_theme = "Gooroom-Numix-Circle";
+		background = BACKGROUND_PATH"gooroom_theme_bg_4.jpg";
 	} else {
 		icon_theme = g_strdup(theme_idx);
 		background = g_strdup_printf ("%sgooroom_user_theme_bg_%s.jpg", BACKGROUND_PATH, theme_idx);
