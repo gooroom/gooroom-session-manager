@@ -1,3 +1,10 @@
+gooroom-session-manager (0.3.8+grm3u1) unstable; urgency=medium
+
+  [ donghun lee ]
+  * [31f89e95] Added gooroom-3.0 theme settings
+
+ -- Gooroom Autobuilder <jenkins@gooroom.kr>  Tue, 06 Sep 2022 16:13:15 +0900
+
 gooroom-session-manager (0.3.7+grm3u1) unstable; urgency=medium
 
   [ subin.kim ]
