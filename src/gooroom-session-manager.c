@@ -597,7 +597,7 @@ save_settings (gchar *list, const gchar *id)
 		settings = g_blacklist_settings;
 	} else if (g_str_equal (id, "controlcenter_items")) {
 		key = "whitelist-panels";
-		schema_name = "org.gnome.ControlCenter";
+		schema_name = "org.gnome.Settings";
 		settings = g_whitelist_settings;
 	} else {
 		key = NULL;
@@ -1380,7 +1380,7 @@ name_acquired_handler (GDBusConnection *connection,
 	}
 
 	schema = g_settings_schema_source_lookup (g_settings_schema_source_get_default (),
-                                              "org.gnome.ControlCenter", TRUE);
+                                              "org.gnome.Settings", TRUE);
 	if (schema) {
 		g_whitelist_settings = g_settings_new_full (schema, NULL, NULL);
 		g_settings_schema_unref (schema);
