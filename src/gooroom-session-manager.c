@@ -1048,6 +1048,10 @@ gooroom_dockbarx_applet_vanished_cb (GDBusConnection *connection,
                                      const gchar     *name,
                                      gpointer         data)
 {
+	if (g_blacklist_settings) {
+		g_signal_handlers_unblock_by_func (g_blacklist_settings,
+                                           gooroom_blacklist_settings_changed, NULL);
+	}
 }
 
 static void
@@ -1143,6 +1147,18 @@ update_blacklist_idle (gpointer user_data)
 	}
 
 	return FALSE;
+}
+
+static void
+apply_application_blacklist (void)
+{
+	if (!g_blacklist_settings)
+		return;
+
+	gchar **blacklist = g_settings_get_strv (g_blacklist_settings, "blacklist");
+	if (blacklist)
+		update_blacklist (blacklist);
+	g_strfreev (blacklist);
 }
 
 static void
@@ -1274,6 +1290,9 @@ agent_job_thread (GTask        *task,
 		set_sleep_inactive_time ();
 		set_controlcenter_whitelist ();
 		set_application_blacklist ();
+
+		/* Apply app blacklist manually */
+		apply_application_blacklist ();
 	}
 
 	/* The task has finished */
