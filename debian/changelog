@@ -1,3 +1,10 @@
+gooroom-session-manager (0.4.0+grm3u1) unstable; urgency=medium
+
+  [ cjheo ]
+  * [12b5c3d1] Fixed a bug where the application execution prohibition policy was not applied when the dock bar was not running.
+
+ -- Gooroom Autobuilder <jenkins@gooroom.kr>  Fri, 27 Sep 2024 12:18:03 +0900
+
 gooroom-session-manager (0.3.9+grm3u1) unstable; urgency=medium
 
   [ donghun.lee ]
