@@ -42,11 +42,15 @@
 #include "panel-glib.h"
 
 #define	GRM_USER		        ".grm-user"
+#define ETC_GOOROOM_TABLET_MODE "/etc/gooroom/.tablet-mode"
 #define	BACKGROUND_PATH         "/usr/share/backgrounds/gooroom/"
 #define	DEFAULT_BACKGROUND      "/usr/share/images/desktop-base/desktop-background.xml"
 #define GCSR_CONF               "/etc/gooroom/gooroom-client-server-register/gcsr.conf"
 #define DEFAULT_THEME_ICON      "Gooroom-Numix-Circle"
 #define DEFAULT_THEME_BG        "file:///usr/share/backgrounds/gooroom/gooroom_theme_bg_4.jpg"
+#define DESKTOP_INTERFACE_SCHEMA_NAME   "org.gnome.desktop.interface"
+#define DESKTOP_APPLICATION_SCHEMA_NAME "org.gnome.desktop.a11y.applications"
+
 
 
 static GSettings  *g_blacklist_settings = NULL;
@@ -1409,6 +1413,9 @@ name_lost_handler (GDBusConnection *connection,
 int
 main (int argc, char **argv)
 {
+	gchar *cmdline = NULL;
+	gboolean on_screen_keyboard = FALSE;
+
 	setlocale (LC_ALL, "");
 	bindtextdomain (GETTEXT_PACKAGE, GNOMELOCALEDIR);
 	textdomain (GETTEXT_PACKAGE);
@@ -1423,6 +1430,18 @@ main (int argc, char **argv)
                                  (GBusNameLostCallback) name_lost_handler,
                                  NULL,
                                  NULL);
+
+	on_screen_keyboard = g_file_test (ETC_GOOROOM_TABLET_MODE, G_FILE_TEST_EXISTS);
+	// 가상키보드 on
+	cmdline = g_strdup_printf ("/usr/bin/gsettings set %s screen-keyboard-enabled %s",
+                           DESKTOP_APPLICATION_SCHEMA_NAME, on_screen_keyboard ? "true" : "false");
+	g_spawn_command_line_sync (cmdline, NULL, NULL, NULL, NULL);
+	g_clear_pointer (&cmdline, g_free);
+
+	cmdline = g_strdup_printf ("/usr/bin/gsettings set %s toolkit-accessibility true",
+                               DESKTOP_INTERFACE_SCHEMA_NAME);
+	g_spawn_command_line_sync (cmdline, NULL, NULL, NULL, NULL);
+	g_clear_pointer (&cmdline, g_free);
 
 	gtk_main ();
 
